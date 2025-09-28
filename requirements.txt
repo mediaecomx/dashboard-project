@@ -1,0 +1,13 @@
+streamlit==1.37.1
+pandas==2.2.2
+numpy==2.0.1
+plotly==5.22.0
+google-analytics-data==0.18.12
+google-auth==2.33.0
+protobuf==5.27.3
+pytz==2024.1
+shopifyapi==12.4.0
+supabase==2.4.0
+streamlit-extras==0.4.3
+streamlit-authenticator==0.3.2
+pyjwt==2.8.0
