@@ -78,7 +78,7 @@ class AppConfig:
     def __init__(self) -> None:
         # Giữ nguyên phần khởi tạo khác
         self.secrets = self._load_secrets()
-        self.AVAILABLE_PROPERTIES = { "Trang Web Chính (PropeLify)": "506473229", "Trang Web Test": "501726461", "Ứng dụng Mobile": "ID_CUA_UNG_DUNG_MOBILE" }
+        self.AVAILABLE_PROPERTIES = { "Trang Web Chính (PropeLify)": "501726461", "Trang Web Test": "506473229", "Ứng dụng Mobile": "ID_CUA_UNG_DUNG_MOBILE" }
         self.DEFAULT_PROPERTY_NAME = "Trang Web Chính (PropeLify)"
         self.HOURLY_TOKEN_QUOTA = 5000
         self.DAILY_TOKEN_QUOTA = 25000
