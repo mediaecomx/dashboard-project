@@ -14,20 +14,20 @@ class DataProcessor:
         self.shopify_service = shopify_service
         self.symbols = config.SYMBOLS
         self.page_title_map = config.page_title_map
-        # --- BẮT ĐẦU THAY ĐỔI ---
-        # Thêm product_to_symbol_map vào processor
         self.product_to_symbol_map = config.product_to_symbol_map
-        # --- KẾT THÚC THAY ĐỔI ---
         
+        # ... (Phần khởi tạo session_state giữ nguyên) ...
         if 'last_ga_data' not in st.session_state:
             st.session_state.last_ga_data = None
         if 'last_ga_fetch_time' not in st.session_state:
             st.session_state.last_ga_fetch_time = None
         if 'last_quota_details' not in st.session_state:
             st.session_state.last_quota_details = None
-
+        if 'last_ga_kpis' not in st.session_state:
+            st.session_state.last_ga_kpis = (0, 0)
+        
+    # ... (Các hàm _extract_core_and_symbol, get_marketer_from_page_title, _get_product_symbol giữ nguyên) ...
     def _extract_core_and_symbol(self, title: str, symbols: list):
-        # ... (Hàm này không thay đổi) ...
         found_symbol = ""
         title_str = str(title)
         for s in symbols:
@@ -41,22 +41,21 @@ class DataProcessor:
         return cleaned_text, found_symbol
 
     def get_marketer_from_page_title(self, title: str) -> str:
-        # ... (Hàm này không thay đổi) ...
         for symbol in self.symbols:
             if symbol in title:
                 return self.page_title_map[symbol]
         return ""
 
-    # --- BẮT ĐẦU THAY ĐỔI ---
-    # Hàm mới để lấy biểu tượng sản phẩm từ tiêu đề
     def _get_product_symbol(self, product_title: str) -> str:
         for product_name, symbol in self.product_to_symbol_map.items():
             if product_name.lower() in product_title.lower():
                 return symbol
-        return "🛒" # Biểu tượng mặc định nếu không tìm thấy
+        return "🛒"
+        
+    # --- BẮT ĐẦU THAY ĐỔI ---
+    # Thêm tham số property_id
+    def get_processed_realtime_data(self, property_id: str, selected_tz):
     # --- KẾT THÚC THAY ĐỔI ---
-
-    def get_processed_realtime_data(self, selected_tz):
         # ... (Phần logic TTL động giữ nguyên) ...
         QUOTA_GUARD_THRESHOLD = 500
         QUOTA_DEGRADED_THRESHOLD = 2000
@@ -74,60 +73,57 @@ class DataProcessor:
                 if time_since_last_fetch < ttl_to_use:
                     can_fetch = False
                     reason = f"Using cached data. Next fetch in {int(ttl_to_use - time_since_last_fetch)}s (Mode: {'Degraded' if ttl_to_use == 300 else 'Normal'})."
+        
         if can_fetch:
-            ga_raw_df, quota_details, fetch_time = self.ga_service.fetch_realtime_report()
+            # --- BẮT ĐẦU THAY ĐỔI ---
+            # Truyền property_id vào hàm của service
+            ga_raw_df, quota_details, fetch_time, active_users_5min, active_users_30min = self.ga_service.fetch_realtime_report(property_id)
+            # --- KẾT THÚC THAY ĐỔI ---
             st.session_state.last_ga_data = ga_raw_df
             st.session_state.last_quota_details = quota_details
             st.session_state.last_ga_fetch_time = fetch_time
+            st.session_state.last_ga_kpis = (active_users_5min, active_users_30min)
             if quota_details.get("tokens_per_hour", {}).get("remaining", 0) < QUOTA_DEGRADED_THRESHOLD:
                  st.sidebar.warning(f"Quota is low! Refresh rate reduced to 5 minutes.")
         else:
             ga_raw_df = st.session_state.last_ga_data
             quota_details = st.session_state.last_quota_details
             fetch_time = st.session_state.last_ga_fetch_time
+            active_users_5min, active_users_30min = st.session_state.last_ga_kpis
             st.sidebar.info(reason)
 
         shopify_raw_df = self.shopify_service.fetch_realtime_purchases()
 
+        # ... (Toàn bộ phần xử lý logic còn lại của hàm này giữ nguyên) ...
         if ga_raw_df is None or ga_raw_df.empty:
+            saved_5min, saved_30min = st.session_state.last_ga_kpis
             return {
-                "active_users_5min": 0, "active_users_30min": 0, "total_views": 0,
+                "active_users_5min": saved_5min, "active_users_30min": saved_30min, "total_views": 0,
                 "purchase_count_30min": 0, "final_pages_df": pd.DataFrame(),
-                "per_min_df": pd.DataFrame(), "fetch_time": datetime.now(timezone.utc),
+                "per_min_df": pd.DataFrame(), "fetch_time": fetch_time or datetime.now(timezone.utc),
                 "quota_details": quota_details or {}, "debug_data": {},
-                "purchase_events": pd.DataFrame() # Trả về DF rỗng
+                "purchase_events": pd.DataFrame()
             }
         
-        # ... (Phần code xử lý GA giữ nguyên) ...
-        active_users_30min = ga_raw_df.groupby('Page Title and Screen Class')['Active Users'].first().sum()
-        active_users_5min = ga_raw_df[ga_raw_df['minutesAgo'] <= 4].groupby('Page Title and Screen Class')['Active Users'].first().sum()
         total_views = ga_raw_df['Views'].sum()
         purchase_count_30min = shopify_raw_df['Purchases'].sum() if not shopify_raw_df.empty else 0
         per_min_summary = ga_raw_df.groupby('minutesAgo')['Active Users'].sum()
         per_min_data = {str(i): per_min_summary.get(i, 0) for i in range(30)}
         per_min_df = pd.DataFrame([{"Time": f"-{int(k)} min", "Active Users": v} for k, v in sorted(per_min_data.items(), key=lambda item: int(item[0]))])
+        
         ga_pages_df = ga_raw_df.groupby("Page Title and Screen Class").agg(ActiveUsers=('Active Users', 'sum')).reset_index()
         ga_processed_df = ga_pages_df.copy()
         ga_processed_df[['core_title', 'symbol']] = ga_processed_df['Page Title and Screen Class'].apply(lambda x: pd.Series(self._extract_core_and_symbol(x, self.symbols)))
         
-        # --- BẮT ĐẦU THAY ĐỔI ---
-        # Khởi tạo DataFrame sự kiện mua hàng
         purchase_events_df = pd.DataFrame()
-        # --- KẾT THÚC THAY ĐỔI ---
-        
         if not shopify_raw_df.empty:
             shopify_processed_df = shopify_raw_df.copy()
             shopify_processed_df['created_at'] = pd.to_datetime(shopify_processed_df['created_at'])
-            
-            # --- BẮT ĐẦU THAY ĐỔI ---
-            # Tạo DataFrame sự kiện trước khi gom nhóm
             events_data = shopify_processed_df.copy()
             events_data['Marketer'] = events_data['Product Title'].apply(self.get_marketer_from_page_title)
             events_data['ProductSymbol'] = events_data['Product Title'].apply(self._get_product_symbol)
-            events_data = events_data[events_data['Marketer'] != ""] # Chỉ giữ các sự kiện có marketer
+            events_data = events_data[events_data['Marketer'] != ""]
             purchase_events_df = events_data[['created_at', 'Marketer', 'ProductSymbol']].copy()
-            # --- KẾT THÚC THAY ĐỔI ---
-
             shopify_processed_df[['core_title', 'symbol']] = shopify_processed_df['Product Title'].apply(lambda x: pd.Series(self._extract_core_and_symbol(x, self.symbols)))
             shopify_grouped = shopify_processed_df.groupby(['core_title', 'symbol']).agg(
                 Purchases=('Purchases', 'sum'),
@@ -141,7 +137,6 @@ class DataProcessor:
             merged_df['Revenue'] = 0.0
             merged_df['LastPurchaseTime'] = pd.NaT
 
-        # ... (Phần code còn lại của hàm giữ nguyên, bao gồm cả việc tạo cột Last Purchase) ...
         merged_df["Purchases"] = merged_df["Purchases"].fillna(0).astype(int)
         merged_df["Revenue"] = merged_df["Revenue"].fillna(0).astype(float)
         merged_df["CR"] = np.divide(merged_df["Purchases"], merged_df["ActiveUsers"], out=np.zeros_like(merged_df["ActiveUsers"], dtype=float), where=(merged_df["ActiveUsers"] != 0)) * 100
@@ -166,23 +161,26 @@ class DataProcessor:
         }
         if 'shopify_grouped' in locals():
             debug_data["shopify_grouped"] = shopify_grouped
-
-        # --- BẮT ĐẦU THAY ĐỔI ---
-        # Thêm purchase_events_df vào kết quả trả về
+        
         return {
             "active_users_5min": active_users_5min, "active_users_30min": active_users_30min,
             "total_views": total_views, "purchase_count_30min": purchase_count_30min,
             "final_pages_df": final_pages_df, "per_min_df": per_min_df,
             "fetch_time": fetch_time, "quota_details": quota_details, "debug_data": debug_data,
-            "purchase_events": purchase_events_df 
+            "purchase_events": purchase_events_df
         }
-        # --- KẾT THÚC THAY ĐỔI ---
 
-    def get_processed_historical_data(self, start_date_str, end_date_str, segment):
-        # ... (Hàm này không thay đổi) ...
-        # (Toàn bộ code của hàm này giữ nguyên)
-        ga_raw_df = self.ga_service.fetch_historical_report(start_date_str, end_date_str, segment)
+    # --- BẮT ĐẦU THAY ĐỔI ---
+    # Thêm tham số property_id
+    def get_processed_historical_data(self, property_id: str, start_date_str, end_date_str, segment):
+    # --- KẾT THÚC THAY ĐỔI ---
+        # --- BẮT ĐẦU THAY ĐỔI ---
+        # Truyền property_id vào hàm của service
+        ga_raw_df = self.ga_service.fetch_historical_report(property_id, start_date_str, end_date_str, segment)
+        # --- KẾT THÚC THAY ĐỔI ---
         shopify_raw_df = self.shopify_service.fetch_historical_purchases(start_date_str, end_date_str, segment)
+
+        # ... (Toàn bộ phần xử lý logic còn lại của hàm này giữ nguyên) ...
         if ga_raw_df.empty:
             return pd.DataFrame(), {"ga_raw": ga_raw_df, "shopify_raw": shopify_raw_df}
         ga_processed_df = ga_raw_df.copy()

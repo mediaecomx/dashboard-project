@@ -8,51 +8,63 @@ import pytz
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import (
     RunRealtimeReportRequest, RunReportRequest, Dimension, Metric, MinuteRange,
-    DateRange, FilterExpression, FilterExpressionList, Filter
+    DateRange
 )
 from config import config
 
 class GoogleAnalyticsService:
-    # --- BẮT ĐẦU SỬA LỖI 1 ---
-    # Thêm lại hàm __init__ để khởi tạo các thuộc tính cho lớp
     def __init__(self):
         self.client = BetaAnalyticsDataClient(credentials=config.ga_credentials)
-        self.property_id = config.PROPERTY_ID
-    # --- KẾT THÚC SỬA LỖI 1 ---
+        # Không cần lưu property_id ở đây nữa
 
+    # --- BẮT ĐẦU THAY ĐỔI ---
+    # Thêm tham số property_id vào hàm
     @st.cache_data(ttl=60)
-    def fetch_realtime_report(_self):
+    def fetch_realtime_report(_self, property_id: str):
+    # --- KẾT THÚC THAY ĐỔI ---
         try:
-            request = RunRealtimeReportRequest(
-                property=f"properties/{_self.property_id}", # Bây giờ _self.property_id sẽ tồn tại
+            kpi_request = RunRealtimeReportRequest(
+                property=f"properties/{property_id}", # Sử dụng property_id từ tham số
+                metrics=[Metric(name="activeUsers")],
+                minute_ranges=[
+                    MinuteRange(start_minutes_ago=29, end_minutes_ago=0),
+                    MinuteRange(start_minutes_ago=4, end_minutes_ago=0)
+                ]
+            )
+            pages_request = RunRealtimeReportRequest(
+                property=f"properties/{property_id}", # Sử dụng property_id từ tham số
                 dimensions=[Dimension(name="unifiedScreenName"), Dimension(name="minutesAgo")],
                 metrics=[Metric(name="activeUsers"), Metric(name="screenPageViews")],
                 minute_ranges=[MinuteRange(start_minutes_ago=29, end_minutes_ago=0)],
                 return_property_quota=True
             )
-            response = _self.client.run_realtime_report(request)
-            pq = getattr(response, "property_quota", None)
+            kpi_response = _self.client.run_realtime_report(kpi_request)
+            pages_response = _self.client.run_realtime_report(pages_request)
+            
+            active_users_30min = (int(kpi_response.rows[0].metric_values[0].value) if kpi_response.rows else 0)
+            active_users_5min = (int(kpi_response.rows[1].metric_values[0].value) if len(kpi_response.rows) > 1 else 0)
+            pq = getattr(pages_response, "property_quota", None)
             quota_details = {
                 "tokens_per_hour": {"consumed": pq.tokens_per_hour.consumed if pq and pq.tokens_per_hour else 0, "remaining": pq.tokens_per_hour.remaining if pq and pq.tokens_per_hour else "N/A"},
                 "tokens_per_day": {"consumed": pq.tokens_per_day.consumed if pq and pq.tokens_per_day else 0, "remaining": pq.tokens_per_day.remaining if pq and pq.tokens_per_day else "N/A"}
             }
-            rows = [{"Page Title and Screen Class": row.dimension_values[0].value, "minutesAgo": int(row.dimension_values[1].value), "Active Users": int(row.metric_values[0].value), "Views": int(row.metric_values[1].value)} for row in response.rows]
-            return pd.DataFrame(rows), quota_details, datetime.now(pytz.utc)
+            rows = [{"Page Title and Screen Class": row.dimension_values[0].value, "minutesAgo": int(row.dimension_values[1].value), "Active Users": int(row.metric_values[0].value), "Views": int(row.metric_values[1].value)} for row in pages_response.rows]
+            return pd.DataFrame(rows), quota_details, datetime.now(pytz.utc), active_users_5min, active_users_30min
         except Exception as e:
             st.error(f"Lỗi khi lấy dữ liệu Realtime từ Google Analytics: {e}")
-            return pd.DataFrame(), {}, datetime.now(pytz.utc)
+            return pd.DataFrame(), {}, datetime.now(pytz.utc), 0, 0
 
-    # ... (Các hàm còn lại của file giữ nguyên)
+    # --- BẮT ĐẦU THAY ĐỔI ---
+    # Thêm tham số property_id vào hàm
     @st.cache_data
-    def fetch_historical_report(_self, start_date: str, end_date: str, segment: str):
+    def fetch_historical_report(_self, property_id: str, start_date: str, end_date: str, segment: str):
+    # --- KẾT THÚC THAY ĐỔI ---
         try:
             dimensions = [Dimension(name="pageTitle")]
-            if segment == 'By Day':
-                dimensions.append(Dimension(name="date"))
-            elif segment == 'By Week':
-                dimensions.append(Dimension(name="week"))
+            if segment == 'By Day': dimensions.append(Dimension(name="date"))
+            elif segment == 'By Week': dimensions.append(Dimension(name="week"))
             request = RunReportRequest(
-                property=f"properties/{_self.property_id}",
+                property=f"properties/{property_id}", # Sử dụng property_id từ tham số
                 dimensions=dimensions,
                 metrics=[Metric(name="sessions"), Metric(name="totalUsers")],
                 date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
@@ -72,6 +84,7 @@ class GoogleAnalyticsService:
             st.error(f"Lỗi khi lấy dữ liệu Lịch sử từ Google Analytics: {e}")
             return pd.DataFrame()
 
+# ... (Lớp ShopifyService không thay đổi) ...
 class ShopifyService:
     def __init__(self):
         self.creds = config.shopify_creds

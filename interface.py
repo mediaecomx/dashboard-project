@@ -9,8 +9,9 @@ import pytz
 import requests
 from datetime import datetime, timedelta
 from config import config
+from streamlit.components.v1 import html
+import json
 
-# ... (Toàn bộ các hàm tiện ích và các hàm của class DashboardUI giữ nguyên) ...
 
 def highlight_metrics(val):
     if isinstance(val, (int, float)) and val > 0:
@@ -52,6 +53,244 @@ def render_progress_bar(value, total):
             }}
         </style>""", unsafe_allow_html=True)
     st.progress(percentage / 100)
+    
+# --- BẮT ĐẦU TÍNH NĂNG MỚI: TÙY CHỈNH CỦA ADMIN ---
+@st.cache_data(ttl=60) # Cache cài đặt trong 60 giây
+def get_app_settings():
+    """Đọc cài đặt toàn cục của ứng dụng từ Supabase."""
+    try:
+        response = config.supabase.table("app_settings").select("*").eq("id", 1).single().execute()
+        if response.data:
+            return response.data
+    except Exception as e:
+        st.error(f"Could not load app settings: {e}")
+    # Trả về giá trị mặc định nếu có lỗi
+    return {
+        "enable_notifications": True,
+        "enable_confetti": True,
+        "confetti_effect": "realistic_look",
+        "confetti_duration_ms": 5000,
+        "toast_duration_ms": 8000
+    }
+
+def admin_settings_ui(current_settings):
+    """Hiển thị giao diện tùy chỉnh cho Admin trên sidebar."""
+    st.divider()
+    st.subheader("⚙️ App Settings")
+    
+    with st.form("app_settings_form"):
+        st.write("Control notifications and effects for all users.")
+        
+        enable_notifications = st.toggle(
+            "Enable Sale Notifications", 
+            value=current_settings.get("enable_notifications", True)
+        )
+        enable_confetti = st.toggle(
+            "Enable Confetti Effect", 
+            value=current_settings.get("enable_confetti", True)
+        )
+        
+        effects = {
+            "Mưa Rơi (Realistic)": "realistic_look",
+            "Bùng Nổ (Big Celebration)": "celebration",
+            "Mưa Sao Băng (Stars)": "stars",
+            "Pháo Hoa (Fireworks)": "fireworks",
+            "Tuyết Rơi (Snow)": "snow"
+        }
+        effect_options = list(effects.keys())
+        # Tìm index của hiệu ứng hiện tại để làm giá trị mặc định
+        try:
+            current_effect_name = list(effects.keys())[list(effects.values()).index(current_settings.get("confetti_effect"))]
+            default_index = effect_options.index(current_effect_name)
+        except ValueError:
+            default_index = 0
+            
+        selected_effect_name = st.selectbox(
+            "Confetti Style", 
+            options=effect_options,
+            index=default_index
+        )
+        
+        confetti_duration = st.slider(
+            "Effect & Toast Duration (seconds)", 
+            min_value=3, max_value=30, 
+            value=int(current_settings.get("confetti_duration_ms", 5000) / 1000),
+            step=1
+        )
+
+        submitted = st.form_submit_button("Save Settings", use_container_width=True)
+        
+        if submitted:
+            new_settings = {
+                "enable_notifications": enable_notifications,
+                "enable_confetti": enable_confetti,
+                "confetti_effect": effects[selected_effect_name],
+                "confetti_duration_ms": confetti_duration * 1000,
+                "updated_at": datetime.now().isoformat()
+            }
+            try:
+                config.supabase.table("app_settings").update(new_settings).eq("id", 1).execute()
+                st.success("Settings updated successfully!")
+                st.cache_data.clear() # Xóa cache để tải lại cài đặt mới
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to save settings: {e}")
+
+def render_realtime_sales_listener(settings):
+    supabase_url = config.supabase_url
+    supabase_anon_key = config.supabase_anon_key
+
+    if not supabase_url or not supabase_anon_key:
+        return
+
+    supabase_url_json = json.dumps(supabase_url or "")
+    supabase_anon_key_json = json.dumps(supabase_anon_key or "")
+    
+    settings_json = json.dumps(settings)
+
+    listener_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="utf-8" />
+    <style>
+      #toast-container {{
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 1000000;
+        display: flex;
+        flex-direction: column-reverse;
+        gap: 12px;
+        align-items: flex-end;
+      }}
+      .sale-toast {{
+        background-image: linear-gradient(145deg, #00b084, #028a68);
+        color: #fff;
+        padding: 20px 28px;
+        border-radius: 12px;
+        box-shadow: 0 12px 35px rgba(0,0,0,0.3);
+        font: 18px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        pointer-events: auto;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        animation: slideInUp 300ms ease-out forwards;
+      }}
+      @keyframes slideInUp {{ from {{ transform: translateY(100%); opacity: 0; }} to {{ transform: translateY(0); opacity: 1; }} }}
+      @keyframes fadeOut {{ from {{ opacity: 1; }} to {{ opacity: 0; visibility: hidden; }} }}
+      .sale-toast strong {{ font-weight: 700; font-size: 20px; }}
+      .sale-toast span {{ display: block; font-size: 15px; opacity: 0.85; margin-top: 5px; }}
+    </style>
+    </head>
+    <body>
+    <script>
+      try {{
+        const frame = window.frameElement;
+        if (frame) {{
+          frame.style.position = "fixed"; frame.style.inset = "0";
+          frame.style.width = "100vw"; frame.style.height = "100vh";
+          frame.style.border = "none"; frame.style.pointerEvents = "none";
+          frame.style.zIndex = "100000";
+        }}
+      }} catch (e) {{}}
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
+    <script>
+      const APP_SETTINGS = {settings_json};
+      const SUPABASE_URL = {supabase_url_json};
+      const SUPABASE_ANON = {supabase_anon_key_json};
+
+      let toastContainer = document.getElementById('toast-container');
+      if (!toastContainer) {{
+        toastContainer = document.createElement('div');
+        toastContainer.id = 'toast-container';
+        document.body.appendChild(toastContainer);
+      }}
+
+      function shootConfetti(durationMs, effectName) {{
+        if (!APP_SETTINGS.enable_confetti) return;
+        const animationEnd = Date.now() + durationMs;
+        const defaults = {{ startVelocity: 30, spread: 360, ticks: 60, zIndex: 1000001 }};
+        
+        function randomInRange(min, max) {{ return Math.random() * (max - min) + min; }}
+        
+        const interval = setInterval(function() {{
+            const timeLeft = animationEnd - Date.now();
+            if (timeLeft <= 0) {{ return clearInterval(interval); }}
+            const particleCount = 50 * (timeLeft / durationMs);
+
+            switch(effectName) {{
+                case 'celebration':
+                    confetti({{ ...defaults, particleCount, origin: {{ x: randomInRange(0.1, 0.9), y: Math.random() - 0.2 }} }});
+                    break;
+                case 'stars':
+                    confetti({{ ...defaults, particleCount: 1, shapes: ['star'], gravity: randomInRange(0.4, 0.6), scalar: randomInRange(0.4, 1), origin: {{ x: Math.random(), y: -0.1 }} }});
+                    break;
+                case 'fireworks':
+                    const x = Math.random(); const y = Math.random();
+                    confetti({{ ...defaults, particleCount, origin: {{ x, y }}, angle: randomInRange(0, 360), spread: 100, decay: 0.9 }});
+                    break;
+                case 'snow':
+                     confetti({{ ...defaults, particleCount: 1, shapes: ['circle'], colors: ['#FFFFFF'], origin: {{ x: Math.random(), y: -0.1 }}, gravity: 0.1, ticks: 200 }});
+                    break;
+                case 'realistic_look':
+                default:
+                    confetti({{ ...defaults, particleCount, origin: {{ x: randomInRange(0.1, 0.3), y: Math.random() - 0.2 }} }});
+                    confetti({{ ...defaults, particleCount, origin: {{ x: randomInRange(0.7, 0.9), y: Math.random() - 0.2 }} }});
+                    break;
+            }}
+        }}, 250);
+      }}
+
+      function showToastAndConfetti(row) {{
+        if (!APP_SETTINGS.enable_notifications) return;
+        
+        const div = document.createElement("div");
+        const revenue = Number(row.revenue || 0).toFixed(2);
+        const title = row.product_title || "New Shopify order";
+        const marketer = row.marketer || "Marketing";
+        const symbol = row.product_symbol || "🛒";
+        div.className = "sale-toast";
+        div.innerHTML = `<strong>${{symbol}} ${{marketer}}</strong> &bull; $${{revenue}}<br/><span>${{title}}</span>`;
+        
+        document.getElementById('toast-container').appendChild(div);
+        
+        shootConfetti(APP_SETTINGS.confetti_duration_ms, APP_SETTINGS.confetti_effect);
+        
+        // --- BẮT ĐẦU SỬA LỖI THEO YÊU CẦU MỚI ---
+        setTimeout(() => {{
+          div.style.animation = "fadeOut 650ms ease-in forwards";
+          setTimeout(() => div.remove(), 700);
+        }}, APP_SETTINGS.confetti_duration_ms); // Sử dụng cùng một giá trị duration
+        // --- KẾT THÚC SỬA LỖI ---
+      }}
+
+      const KEY = "notified_order_ids_v2";
+      const load = () => {{ try {{ const m = JSON.parse(localStorage.getItem(KEY) || "{{}}"); const now = Date.now(); for (const k of Object.keys(m)) if (now - m[k] > 86400000) delete m[k]; localStorage.setItem(KEY, JSON.stringify(m)); return m; }} catch {{ return {{}}; }} }};
+      const seen = id => !!load()[id];
+      const mark = id => {{ const m = load(); m[id] = Date.now(); localStorage.setItem(KEY, JSON.stringify(m)); }};
+
+      if (SUPABASE_URL && SUPABASE_ANON) {{
+        const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON, {{ realtime: {{ params: {{ eventsPerSecond: 5 }} }} }});
+        
+        client.channel("realtime_sales_notifications")
+          .on("postgres_changes", {{ event: "INSERT", schema: "public", table: "sales_events" }}, (payload) => {{
+            const row = payload?.new || {{}};
+            const id = String(row.order_id || "");
+            if (!id || seen(id)) return;
+            showToastAndConfetti(row);
+            mark(id);
+          }})
+          .subscribe();
+      }}
+    </script>
+    </body>
+    </html>
+    """
+    html(listener_html, height=0)
+
+# --- KẾT THÚC TÍNH NĂNG MỚI ---
 
 class DashboardUI:
     def __init__(self, auth, data_processor):
@@ -59,6 +298,9 @@ class DashboardUI:
         self.processor = data_processor
         if 'realtime_history' not in st.session_state:
             st.session_state.realtime_history = []
+        
+        if 'property_name' not in st.session_state:
+            st.session_state.property_name = config.DEFAULT_PROPERTY_NAME
 
     def render_sidebar(self):
         with st.sidebar:
@@ -77,6 +319,34 @@ class DashboardUI:
             
             self.auth.logout("Log Out", "sidebar") 
 
+            if user_info['role'] == 'admin':
+                st.divider()
+                st.subheader("Admin Controls")
+                
+                property_names = list(config.AVAILABLE_PROPERTIES.keys())
+                
+                try:
+                    current_index = property_names.index(st.session_state.property_name)
+                except ValueError:
+                    current_index = 0
+
+                selected_property_name = st.selectbox(
+                    "Select Google Analytics Property", 
+                    options=property_names,
+                    index=current_index
+                )
+                
+                if selected_property_name != st.session_state.property_name:
+                    st.session_state.property_name = selected_property_name
+                    st.cache_data.clear() 
+                    st.rerun() 
+            
+            st.info(f"Viewing data for: **{st.session_state.property_name}**")
+
+            app_settings = get_app_settings()
+            if user_info['role'] == 'admin':
+                admin_settings_ui(app_settings)
+            
             impersonating = False
             effective_user_info = user_info
             if user_info['role'] == 'admin':
@@ -91,42 +361,18 @@ class DashboardUI:
             
             debug_mode = st.checkbox("Enable Debug Mode") if user_info['role'] == 'admin' and not impersonating else False
         
-        return page, effective_user_info, debug_mode
+        return page, effective_user_info, debug_mode, app_settings
 
-    def render_profile_page(self):
-        st.title("👤 Your Profile")
-        st.header("Update Your Avatar")
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            avatar_url = st.session_state['user_info'].get('avatar_url') or config.default_avatar_url
-            st.image(avatar_url, width=150)
-        with col2:
-            uploaded_file = st.file_uploader("Upload a new image (JPG, PNG):", type=["jpg", "jpeg", "png"])
-            if uploaded_file:
-                with st.spinner("Uploading to Cloudinary..."):
-                    try:
-                        response = requests.post(f"https://api.cloudinary.com/v1_1/{config.cloudinary_cloud_name}/image/upload",
-                                                 files={"file": uploaded_file.getvalue()},
-                                                 data={"upload_preset": config.cloudinary_upload_preset},
-                                                 timeout=30)
-                        response.raise_for_status()
-                        new_link = response.json().get("secure_url")
-                        if new_link:
-                            username = st.session_state['user_info']['username']
-                            config.supabase.table("profiles").upsert({"username": username, "avatar_url": new_link}).execute()
-                            st.session_state['avatar_url'] = new_link
-                            st.session_state['user_info']['avatar_url'] = new_link
-                            st.success("Avatar updated successfully!")
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error("Upload succeeded but no URL returned.")
-                    except Exception as e:
-                        st.error(f"Failed to upload image. Error: {e}")
-
-    def render_realtime_dashboard(self, effective_user_info, debug_mode):
+    def render_realtime_dashboard(self, effective_user_info, debug_mode, app_settings):
         st.title("🚀 Realtime Dashboard")
+        
+        render_realtime_sales_listener(app_settings)
+        
+        current_property_id = config.AVAILABLE_PROPERTIES[st.session_state.property_name]
+
         with st.sidebar:
+            st.divider()
+            st.subheader("Dashboard Settings")
             selected_tz_name = st.selectbox("Select Timezone", options=list(config.TIMEZONE_MAPPINGS.keys()), key="timezone_selector")
             refresh_interval = st.session_state.get('refresh_interval', 75)
             if st.session_state['user_info']['role'] == 'admin' and effective_user_info['role'] == 'admin':
@@ -149,7 +395,7 @@ class DashboardUI:
         timer_placeholder, placeholder = st.empty(), st.empty()
 
         with placeholder.container():
-            data = self.processor.get_processed_realtime_data(selected_tz)
+            data = self.processor.get_processed_realtime_data(current_property_id, selected_tz)
             localized_fetch_time = data['fetch_time'].astimezone(selected_tz)
             st.markdown(f"*Last update: {localized_fetch_time.strftime('%Y-%m-%d %H:%M:%S')}*")
             top_col1, top_col2, top_col3 = st.columns(3)
@@ -181,22 +427,15 @@ class DashboardUI:
             if debug_mode:
                 self._render_realtime_debug_section(data['debug_data'], data['quota_details'])
 
-        # --- BẮT ĐẦU SỬA LỖI ---
-        # Thay thế vòng lặp for bằng vòng lặp while để kiểm soát việc đếm ngược
         seconds_left = refresh_interval
         while seconds_left > 0:
             timer_placeholder.markdown(f'<p style="color:green;"><b>Next refresh in: {int(seconds_left)} seconds...</b></p>', unsafe_allow_html=True)
-            
-            # Ngủ 5 giây, hoặc ít hơn nếu thời gian còn lại nhỏ hơn 5 giây
             sleep_duration = min(seconds_left, 5)
             time.sleep(sleep_duration)
-            
-            # Trừ đi chính xác số giây đã ngủ
             seconds_left -= sleep_duration
         
         timer_placeholder.markdown(f'<p style="color:blue;"><b>Refreshing now...</b></p>', unsafe_allow_html=True)
         st.rerun()
-        # --- KẾT THÚC SỬA LỖI ---
 
     def _render_realtime_trend_chart(self, data, localized_fetch_time, refresh_interval, purchase_events):
         if not data['final_pages_df'].empty:
@@ -244,7 +483,6 @@ class DashboardUI:
                         ))
                     except (ValueError, IndexError):
                         pass
-            
             st.plotly_chart(fig_trend, use_container_width=True)
         else:
             st.write("Collecting data for trend chart... Please wait for the next refresh.")
@@ -311,6 +549,9 @@ class DashboardUI:
 
     def render_historical_report(self, effective_user_info, debug_mode):
         st.title("📊 Page Performance Report")
+        
+        current_property_id = config.AVAILABLE_PROPERTIES[st.session_state.property_name]
+
         col1, col2 = st.columns(2)
         with col1:
             date_options = ["Today", "Yesterday", "This Week", "Last Week", "Last 7 days", "Last 30 days", "Custom Range..."]
@@ -324,7 +565,7 @@ class DashboardUI:
         if start_date and end_date:
             st.markdown(f"**Displaying data for:** `{start_date.strftime('%b %d, %Y')}{' - ' + end_date.strftime('%b %d, %Y') if start_date != end_date else ''}`")
             with st.spinner("Fetching data from GA & Shopify..."):
-                all_data_df, debug_data = self.processor.get_processed_historical_data(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), segment_option)
+                all_data_df, debug_data = self.processor.get_processed_historical_data(current_property_id, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), segment_option)
                 if not all_data_df.empty:
                     if segment_option != 'Summary':
                         all_data_df = all_data_df[all_data_df['Purchases'] >= min_purchases]
@@ -333,7 +574,9 @@ class DashboardUI:
                         data_to_display = all_data_df
                     else:
                         marketer_id = effective_user_info['marketer_id']
-                        data_to_display = all_data_df[all_data_df['Marketer'] == marketer_id]
+                        employee_df = all_data_df[all_data_df['Marketer'] == marketer_id]
+                        data_to_display = employee_df
+                    
                     if not data_to_display.empty:
                         if segment_option == "Summary":
                             total_sessions = data_to_display['Sessions'].sum()
@@ -344,22 +587,29 @@ class DashboardUI:
                             total_user_cr = (total_purchases / total_users * 100) if total_users > 0 else 0
                             total_row = pd.DataFrame([{"Page Title": "Total", "Marketer": "", "Sessions": total_sessions, "Users": total_users, "Purchases": total_purchases, "Revenue": total_revenue, "Session CR": total_session_cr, "User CR": total_user_cr}])
                             data_to_display = pd.concat([total_row, data_to_display], ignore_index=True)
+
                         st.dataframe(
-                            data_to_display.style.format({'Revenue': "${:,.2f}", 'Session CR': "{:.2f}%", 'User CR': "{:.2f}%"}).apply(lambda x: x.map(highlight_metrics) if x.name in ['Purchases', 'Revenue', 'Session CR', 'User CR'] else [''] * len(x), axis=0),
-                            use_container_width=True,
-                            column_config={"Page Title": st.column_config.TextColumn(width="large")}
+                            data_to_display.style.format({
+                                'Revenue': "${:,.2f}",
+                                'Session CR': "{:.2f}%",
+                                'User CR': "{:.2f}%"
+                            }).apply(lambda x: x.map(highlight_metrics) if x.name in ['Purchases', 'Revenue', 'Session CR', 'User CR'] else [''] * len(x), axis=0),
+                            use_container_width=True
                         )
-                    else:
-                        st.write("No data found for your user/filters in the selected date range.")
+                    else: st.write("No data found for your user/filters in the selected date range.")
+                    
                     if debug_mode:
                         st.divider()
                         st.subheader(f"🕵️‍♂️ Debug Mode: Page Performance Data Flow ({segment_option})")
-                        with st.expander("1. Raw Google Analytics Data"): st.dataframe(debug_data['ga_raw'])
-                        with st.expander("2. Raw Shopify Data"): st.dataframe(debug_data['shopify_raw'])
-                        with st.expander("3. Merged Data (Before final grouping)"): st.dataframe(debug_data['merged'])
-                        with st.expander("4. Final Data (Grouped, with Marketer, Sorted)"): st.dataframe(debug_data['final'])
-                else:
-                    st.write("No page data found with sessions in the selected date range.")
+                        with st.expander("1. Raw Google Analytics Data"):
+                            st.dataframe(debug_data['ga_raw']);
+                        with st.expander("2. Raw Shopify Data"):
+                            st.dataframe(debug_data['shopify_raw']);
+                        with st.expander("3. Merged Data (Before final grouping)"):
+                            st.dataframe(debug_data['merged']);
+                        with st.expander("4. Final Data (Grouped, with Marketer, Sorted)"):
+                            st.dataframe(debug_data['final']);
+                else: st.write("No page data found with sessions in the selected date range.")
     
     def _get_date_range_from_selection(self, selection: str):
         if selection == "Custom Range...":

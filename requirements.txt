@@ -1,3 +1,6 @@
+# FILE: requirements.txt
+
+# Các thư viện chính của ứng dụng
 streamlit==1.37.1
 pandas==2.2.2
 numpy==2.0.1
@@ -7,7 +10,19 @@ google-auth==2.33.0
 protobuf==5.27.3
 pytz==2024.1
 shopifyapi==12.4.0
-supabase==2.4.0
 streamlit-extras==0.4.3
 streamlit-authenticator==0.3.2
 pyjwt==2.8.0
+toml
+
+
+# Pin (khóa) các phiên bản của Supabase và các thư viện phụ thuộc
+# để giải quyết triệt để lỗi xung đột "unexpected keyword argument 'proxy'"
+# gây ra bởi thư viện httpx không tương thích.
+supabase==2.4.5
+httpx==0.27.2
+httpcore==1.0.5
+postgrest==0.16.4
+gotrue==2.8.1
+storage3==0.7.4
+realtime==1.0.4

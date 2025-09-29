@@ -62,14 +62,22 @@ def main():
         data_processor = DataProcessor(ga_service, shopify_service)
         ui = DashboardUI(authenticator, data_processor)
 
-        page, effective_user_info, debug_mode = ui.render_sidebar()
+        # --- BẮT ĐẦU SỬA LỖI ---
+        # Nhận thêm app_settings từ sidebar
+        page, effective_user_info, debug_mode, app_settings = ui.render_sidebar()
         
         if page == "Realtime Dashboard":
-            ui.render_realtime_dashboard(effective_user_info, debug_mode)
+            # Truyền app_settings vào hàm render
+            ui.render_realtime_dashboard(effective_user_info, debug_mode, app_settings)
+        # --- KẾT THÚC SỬA LỖI ---
         elif page == "Landing Page Report":
             ui.render_historical_report(effective_user_info, debug_mode)
         elif page == "Profile":
-            ui.render_profile_page()
+            # Giả sử bạn có hàm này, nếu không, hãy tạm comment lại
+            # ui.render_profile_page() 
+            st.title("Profile Page")
+            st.write("This page is under construction.")
+
 
     elif st.session_state["authentication_status"] is False:
         st.error('Tên người dùng hoặc mật khẩu không chính xác')
