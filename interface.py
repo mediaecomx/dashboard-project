@@ -70,7 +70,9 @@ def get_app_settings():
         "enable_confetti": True,
         "confetti_effect": "realistic_look",
         "confetti_duration_ms": 5000,
-        "toast_duration_ms": 8000
+        "toast_duration_ms": 8000,
+        "toast_sound_url": "", # Giá trị mặc định
+        "confetti_sound_url": "" # Giá trị mặc định
     }
 
 def admin_settings_ui(current_settings):
@@ -126,6 +128,8 @@ def admin_settings_ui(current_settings):
                 "enable_confetti": enable_confetti,
                 "confetti_effect": effects[selected_effect_name],
                 "confetti_duration_ms": confetti_duration * 1000,
+                # Giả sử toast_duration_ms bằng confetti_duration_ms
+                "toast_duration_ms": confetti_duration * 1000,
                 "updated_at": datetime.now().isoformat()
             }
             try:
@@ -208,8 +212,28 @@ def render_realtime_sales_listener(settings):
         document.body.appendChild(toastContainer);
       }}
 
+      // --- BẮT ĐẦU TÍNH NĂNG MỚI: HÀM PHÁT ÂM THANH ---
+      function playSound(url) {{
+        if (url) {{
+          try {{
+            const audio = new Audio(url);
+            // Thêm .catch để xử lý lỗi trình duyệt chặn tự động phát âm thanh
+            audio.play().catch(e => console.warn("Audio play was prevented by browser policy.", e));
+          }} catch (e) {{
+            console.error("Error creating or playing audio:", e);
+          }}
+        }}
+      }}
+      // --- KẾT THÚC TÍNH NĂNG MỚI ---
+
       function shootConfetti(durationMs, effectName) {{
         if (!APP_SETTINGS.enable_confetti) return;
+        
+        // --- BẮT ĐẦU TÍNH NĂNG MỚI: PHÁT ÂM THANH CONFETTI ---
+        // Âm thanh được phát một lần khi hàm này được gọi
+        playSound(APP_SETTINGS.confetti_sound_url);
+        // --- KẾT THÚC TÍNH NĂNG MỚI ---
+
         const animationEnd = Date.now() + durationMs;
         const defaults = {{ startVelocity: 30, spread: 360, ticks: 60, zIndex: 1000001 }};
         
@@ -246,6 +270,10 @@ def render_realtime_sales_listener(settings):
       function showToastAndConfetti(row) {{
         if (!APP_SETTINGS.enable_notifications) return;
         
+        // --- BẮT ĐẦU TÍNH NĂNG MỚI: PHÁT ÂM THANH TOAST ---
+        playSound(APP_SETTINGS.toast_sound_url);
+        // --- KẾT THÚC TÍNH NĂNG MỚI ---
+        
         const div = document.createElement("div");
         const revenue = Number(row.revenue || 0).toFixed(2);
         const title = row.product_title || "New Shopify order";
@@ -258,12 +286,10 @@ def render_realtime_sales_listener(settings):
         
         shootConfetti(APP_SETTINGS.confetti_duration_ms, APP_SETTINGS.confetti_effect);
         
-        // --- BẮT ĐẦU SỬA LỖI THEO YÊU CẦU MỚI ---
         setTimeout(() => {{
           div.style.animation = "fadeOut 650ms ease-in forwards";
           setTimeout(() => div.remove(), 700);
-        }}, APP_SETTINGS.confetti_duration_ms); // Sử dụng cùng một giá trị duration
-        // --- KẾT THÚC SỬA LỖI ---
+        }}, APP_SETTINGS.toast_duration_ms); // Thay đổi từ confetti sang toast duration
       }}
 
       const KEY = "notified_order_ids_v2";
