@@ -5,18 +5,20 @@ import numpy as np
 import streamlit as st
 from datetime import datetime, timezone
 import re
-from config import config
+# --- THAY ĐỔI ---
+# Không import config trực tiếp nữa
+# --- KẾT THÚC THAY ĐỔI ---
 from services import GoogleAnalyticsService, ShopifyService
 
 class DataProcessor:
-    def __init__(self, ga_service: GoogleAnalyticsService, shopify_service: ShopifyService):
+    # --- THAY ĐỔI: Nhận config trong __init__ ---
+    def __init__(self, ga_service: GoogleAnalyticsService, shopify_service: ShopifyService, config):
         self.ga_service = ga_service
         self.shopify_service = shopify_service
         self.symbols = config.SYMBOLS
         self.page_title_map = config.page_title_map
         self.product_to_symbol_map = config.product_to_symbol_map
         
-        # ... (Phần khởi tạo session_state giữ nguyên) ...
         if 'last_ga_data' not in st.session_state:
             st.session_state.last_ga_data = None
         if 'last_ga_fetch_time' not in st.session_state:
@@ -26,7 +28,6 @@ class DataProcessor:
         if 'last_ga_kpis' not in st.session_state:
             st.session_state.last_ga_kpis = (0, 0)
         
-    # ... (Các hàm _extract_core_and_symbol, get_marketer_from_page_title, _get_product_symbol giữ nguyên) ...
     def _extract_core_and_symbol(self, title: str, symbols: list):
         found_symbol = ""
         title_str = str(title)
@@ -52,11 +53,7 @@ class DataProcessor:
                 return symbol
         return "🛒"
         
-    # --- BẮT ĐẦU THAY ĐỔI ---
-    # Thêm tham số property_id
     def get_processed_realtime_data(self, property_id: str, selected_tz):
-    # --- KẾT THÚC THAY ĐỔI ---
-        # ... (Phần logic TTL động giữ nguyên) ...
         QUOTA_GUARD_THRESHOLD = 500
         QUOTA_DEGRADED_THRESHOLD = 2000
         DYNAMIC_TTLS = {'normal': 60, 'degraded': 300}
@@ -75,10 +72,7 @@ class DataProcessor:
                     reason = f"Using cached data. Next fetch in {int(ttl_to_use - time_since_last_fetch)}s (Mode: {'Degraded' if ttl_to_use == 300 else 'Normal'})."
         
         if can_fetch:
-            # --- BẮT ĐẦU THAY ĐỔI ---
-            # Truyền property_id vào hàm của service
             ga_raw_df, quota_details, fetch_time, active_users_5min, active_users_30min = self.ga_service.fetch_realtime_report(property_id)
-            # --- KẾT THÚC THAY ĐỔI ---
             st.session_state.last_ga_data = ga_raw_df
             st.session_state.last_quota_details = quota_details
             st.session_state.last_ga_fetch_time = fetch_time
@@ -94,7 +88,6 @@ class DataProcessor:
 
         shopify_raw_df = self.shopify_service.fetch_realtime_purchases()
 
-        # ... (Toàn bộ phần xử lý logic còn lại của hàm này giữ nguyên) ...
         if ga_raw_df is None or ga_raw_df.empty:
             saved_5min, saved_30min = st.session_state.last_ga_kpis
             return {
@@ -170,17 +163,10 @@ class DataProcessor:
             "purchase_events": purchase_events_df
         }
 
-    # --- BẮT ĐẦU THAY ĐỔI ---
-    # Thêm tham số property_id
     def get_processed_historical_data(self, property_id: str, start_date_str, end_date_str, segment):
-    # --- KẾT THÚC THAY ĐỔI ---
-        # --- BẮT ĐẦU THAY ĐỔI ---
-        # Truyền property_id vào hàm của service
         ga_raw_df = self.ga_service.fetch_historical_report(property_id, start_date_str, end_date_str, segment)
-        # --- KẾT THÚC THAY ĐỔI ---
         shopify_raw_df = self.shopify_service.fetch_historical_purchases(start_date_str, end_date_str, segment)
 
-        # ... (Toàn bộ phần xử lý logic còn lại của hàm này giữ nguyên) ...
         if ga_raw_df.empty:
             return pd.DataFrame(), {"ga_raw": ga_raw_df, "shopify_raw": shopify_raw_df}
         ga_processed_df = ga_raw_df.copy()
