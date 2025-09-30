@@ -10,21 +10,20 @@ from google.analytics.data_v1beta.types import (
     RunRealtimeReportRequest, RunReportRequest, Dimension, Metric, MinuteRange,
     DateRange
 )
-from config import config
+# --- THAY ĐỔI ---
+# Không import config trực tiếp nữa
+# --- KẾT THÚC THAY ĐỔI ---
 
 class GoogleAnalyticsService:
-    def __init__(self):
+    # --- THAY ĐỔI: Nhận config trong __init__ ---
+    def __init__(self, config):
         self.client = BetaAnalyticsDataClient(credentials=config.ga_credentials)
-        # Không cần lưu property_id ở đây nữa
 
-    # --- BẮT ĐẦU THAY ĐỔI ---
-    # Thêm tham số property_id vào hàm
     @st.cache_data(ttl=60)
     def fetch_realtime_report(_self, property_id: str):
-    # --- KẾT THÚC THAY ĐỔI ---
         try:
             kpi_request = RunRealtimeReportRequest(
-                property=f"properties/{property_id}", # Sử dụng property_id từ tham số
+                property=f"properties/{property_id}",
                 metrics=[Metric(name="activeUsers")],
                 minute_ranges=[
                     MinuteRange(start_minutes_ago=29, end_minutes_ago=0),
@@ -32,7 +31,7 @@ class GoogleAnalyticsService:
                 ]
             )
             pages_request = RunRealtimeReportRequest(
-                property=f"properties/{property_id}", # Sử dụng property_id từ tham số
+                property=f"properties/{property_id}",
                 dimensions=[Dimension(name="unifiedScreenName"), Dimension(name="minutesAgo")],
                 metrics=[Metric(name="activeUsers"), Metric(name="screenPageViews")],
                 minute_ranges=[MinuteRange(start_minutes_ago=29, end_minutes_ago=0)],
@@ -54,17 +53,14 @@ class GoogleAnalyticsService:
             st.error(f"Lỗi khi lấy dữ liệu Realtime từ Google Analytics: {e}")
             return pd.DataFrame(), {}, datetime.now(pytz.utc), 0, 0
 
-    # --- BẮT ĐẦU THAY ĐỔI ---
-    # Thêm tham số property_id vào hàm
     @st.cache_data
     def fetch_historical_report(_self, property_id: str, start_date: str, end_date: str, segment: str):
-    # --- KẾT THÚC THAY ĐỔI ---
         try:
             dimensions = [Dimension(name="pageTitle")]
             if segment == 'By Day': dimensions.append(Dimension(name="date"))
             elif segment == 'By Week': dimensions.append(Dimension(name="week"))
             request = RunReportRequest(
-                property=f"properties/{property_id}", # Sử dụng property_id từ tham số
+                property=f"properties/{property_id}",
                 dimensions=dimensions,
                 metrics=[Metric(name="sessions"), Metric(name="totalUsers")],
                 date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
@@ -84,12 +80,13 @@ class GoogleAnalyticsService:
             st.error(f"Lỗi khi lấy dữ liệu Lịch sử từ Google Analytics: {e}")
             return pd.DataFrame()
 
-# ... (Lớp ShopifyService không thay đổi) ...
 class ShopifyService:
-    def __init__(self):
+    # --- THAY ĐỔI: Nhận config trong __init__ ---
+    def __init__(self, config):
         self.creds = config.shopify_creds
         self.base_url = f"https://{self.creds['store_url']}/admin/api/{self.creds['api_version']}/orders.json"
         self.headers = {"X-Shopify-Access-Token": self.creds['access_token']}
+
     @st.cache_data(ttl=60)
     def fetch_realtime_purchases(_self):
         try:
@@ -119,6 +116,7 @@ class ShopifyService:
         except Exception as e:
             print(f"Lỗi khi lấy dữ liệu Realtime từ Shopify: {e}")
             return pd.DataFrame()
+
     @st.cache_data
     def fetch_historical_purchases(_self, start_date: str, end_date: str, segment: str):
         purchase_data = []
