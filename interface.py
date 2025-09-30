@@ -7,11 +7,63 @@ import plotly.graph_objects as go
 import time
 import pytz
 import requests
-from datetime import datetime, timedelta
-from config import config
+from datetime import datetime, timedelta, timezone
+from config import get_config
 from streamlit.components.v1 import html
 import json
 
+# --- THAY ĐỔI: Bỏ thư viện random vì không còn dọn dẹp ngẫu nhiên ---
+
+@st.cache_data(ttl=60)
+def load_history_from_supabase(time_window_hours):
+    """
+    Tải dữ liệu lịch sử từ Supabase trong khoảng thời gian quy định (tính bằng giờ).
+    """
+    try:
+        config = get_config()
+        # --- THAY ĐỔI: Sử dụng hours thay vì minutes ---
+        start_time = datetime.now(timezone.utc) - timedelta(hours=time_window_hours)
+        
+        response = config.supabase.table("realtime_history").select("timestamp, snapshot_data") \
+            .gte("timestamp", start_time.isoformat()) \
+            .order("timestamp", desc=False) \
+            .execute()
+
+        if not response.data:
+            return pd.DataFrame()
+
+        records = []
+        for row in response.data:
+            ts = pd.to_datetime(row['timestamp'])
+            snapshot = row['snapshot_data']
+            if snapshot:
+                for marketer, users in snapshot.items():
+                    records.append({
+                        'timestamp': ts,
+                        'Marketer': marketer,
+                        'Active Users': users
+                    })
+        
+        return pd.DataFrame(records)
+
+    except Exception as e:
+        print(f"Error loading history from Supabase: {e}")
+        return pd.DataFrame()
+
+def save_snapshot_to_supabase(snapshot_data, timestamp):
+    """
+    Lưu một bản ghi dữ liệu mới vào Supabase.
+    """
+    try:
+        config = get_config()
+        config.supabase.table("realtime_history").insert({
+            "timestamp": timestamp.isoformat(),
+            "snapshot_data": snapshot_data
+        }).execute()
+    except Exception as e:
+        print(f"Error saving snapshot to Supabase: {e}")
+
+# --- THAY ĐỔI: Xóa hàm cleanup_old_history_supabase() vì đã dùng Cron Job ---
 
 def highlight_metrics(val):
     if isinstance(val, (int, float)) and val > 0:
@@ -54,25 +106,28 @@ def render_progress_bar(value, total):
         </style>""", unsafe_allow_html=True)
     st.progress(percentage / 100)
     
-# --- BẮT ĐẦU TÍNH NĂNG MỚI: TÙY CHỈNH CỦA ADMIN ---
-@st.cache_data(ttl=60) # Cache cài đặt trong 60 giây
+@st.cache_data(ttl=60)
 def get_app_settings():
     """Đọc cài đặt toàn cục của ứng dụng từ Supabase."""
     try:
+        config = get_config()
+        # Lấy tất cả các cột, bao gồm cả các cột mới
         response = config.supabase.table("app_settings").select("*").eq("id", 1).single().execute()
         if response.data:
             return response.data
     except Exception as e:
         st.error(f"Could not load app settings: {e}")
-    # Trả về giá trị mặc định nếu có lỗi
+    # Trả về giá trị mặc định nếu có lỗi, bao gồm cả các giá trị mới
     return {
         "enable_notifications": True,
         "enable_confetti": True,
         "confetti_effect": "realistic_look",
         "confetti_duration_ms": 5000,
         "toast_duration_ms": 8000,
-        "toast_sound_url": "", # Giá trị mặc định
-        "confetti_sound_url": "" # Giá trị mặc định
+        "toast_sound_url": "",
+        "confetti_sound_url": "",
+        "refresh_interval": 75,
+        "time_window_hours": 3
     }
 
 def admin_settings_ui(current_settings):
@@ -81,8 +136,39 @@ def admin_settings_ui(current_settings):
     st.subheader("⚙️ App Settings")
     
     with st.form("app_settings_form"):
-        st.write("Control notifications and effects for all users.")
+        st.write("Control global settings for all users.")
         
+        # --- BẮT ĐẦU TÍNH NĂNG MỚI: Cài đặt chung ---
+        st.write("**Realtime Dashboard Settings**")
+        
+        # Lấy giá trị hiện tại từ settings, nếu không có thì dùng mặc định
+        current_interval = current_settings.get("refresh_interval", 75)
+        new_interval = st.number_input(
+            "Refresh Interval (seconds)", 
+            min_value=30, 
+            value=current_interval, 
+            step=15,
+            help="How often the dashboard should refresh for all users."
+        )
+
+        time_window_options = [1, 3, 6, 12, 24]
+        current_window_hours = current_settings.get("time_window_hours", 3)
+        try:
+            default_index = time_window_options.index(current_window_hours)
+        except ValueError:
+            default_index = 1 # Mặc định là 3 giờ
+
+        selected_window_hours = st.selectbox(
+            "Chart Time Window (hours)", 
+            options=time_window_options, 
+            index=default_index,
+            help="The time range displayed on the trend chart."
+        )
+        
+        st.divider()
+        st.write("**Notification & Effect Settings**")
+        # --- KẾT THÚC TÍNH NĂNG MỚI ---
+
         enable_notifications = st.toggle(
             "Enable Sale Notifications", 
             value=current_settings.get("enable_notifications", True)
@@ -100,7 +186,6 @@ def admin_settings_ui(current_settings):
             "Tuyết Rơi (Snow)": "snow"
         }
         effect_options = list(effects.keys())
-        # Tìm index của hiệu ứng hiện tại để làm giá trị mặc định
         try:
             current_effect_name = list(effects.keys())[list(effects.values()).index(current_settings.get("confetti_effect"))]
             default_index = effect_options.index(current_effect_name)
@@ -120,28 +205,33 @@ def admin_settings_ui(current_settings):
             step=1
         )
 
-        submitted = st.form_submit_button("Save Settings", use_container_width=True)
+        submitted = st.form_submit_button("Save All Settings", use_container_width=True)
         
         if submitted:
+            # Gom tất cả các cài đặt mới vào một dictionary để update
             new_settings = {
+                "refresh_interval": new_interval,
+                "time_window_hours": selected_window_hours,
                 "enable_notifications": enable_notifications,
                 "enable_confetti": enable_confetti,
                 "confetti_effect": effects[selected_effect_name],
                 "confetti_duration_ms": confetti_duration * 1000,
-                # Giả sử toast_duration_ms bằng confetti_duration_ms
                 "toast_duration_ms": confetti_duration * 1000,
                 "updated_at": datetime.now().isoformat()
             }
             try:
+                config = get_config()
+                # Update tất cả các cài đặt lên Supabase một lần duy nhất
                 config.supabase.table("app_settings").update(new_settings).eq("id", 1).execute()
-                st.success("Settings updated successfully!")
-                st.cache_data.clear() # Xóa cache để tải lại cài đặt mới
+                st.success("Global settings updated successfully!")
+                st.cache_data.clear()
                 time.sleep(1)
                 st.rerun()
             except Exception as e:
                 st.error(f"Failed to save settings: {e}")
 
 def render_realtime_sales_listener(settings):
+    config = get_config()
     supabase_url = config.supabase_url
     supabase_anon_key = config.supabase_anon_key
 
@@ -212,27 +302,21 @@ def render_realtime_sales_listener(settings):
         document.body.appendChild(toastContainer);
       }}
 
-      // --- BẮT ĐẦU TÍNH NĂNG MỚI: HÀM PHÁT ÂM THANH ---
       function playSound(url) {{
         if (url) {{
           try {{
             const audio = new Audio(url);
-            // Thêm .catch để xử lý lỗi trình duyệt chặn tự động phát âm thanh
             audio.play().catch(e => console.warn("Audio play was prevented by browser policy.", e));
           }} catch (e) {{
             console.error("Error creating or playing audio:", e);
           }}
         }}
       }}
-      // --- KẾT THÚC TÍNH NĂNG MỚI ---
 
       function shootConfetti(durationMs, effectName) {{
         if (!APP_SETTINGS.enable_confetti) return;
         
-        // --- BẮT ĐẦU TÍNH NĂNG MỚI: PHÁT ÂM THANH CONFETTI ---
-        // Âm thanh được phát một lần khi hàm này được gọi
         playSound(APP_SETTINGS.confetti_sound_url);
-        // --- KẾT THÚC TÍNH NĂNG MỚI ---
 
         const animationEnd = Date.now() + durationMs;
         const defaults = {{ startVelocity: 30, spread: 360, ticks: 60, zIndex: 1000001 }};
@@ -245,24 +329,11 @@ def render_realtime_sales_listener(settings):
             const particleCount = 50 * (timeLeft / durationMs);
 
             switch(effectName) {{
-                case 'celebration':
-                    confetti({{ ...defaults, particleCount, origin: {{ x: randomInRange(0.1, 0.9), y: Math.random() - 0.2 }} }});
-                    break;
-                case 'stars':
-                    confetti({{ ...defaults, particleCount: 1, shapes: ['star'], gravity: randomInRange(0.4, 0.6), scalar: randomInRange(0.4, 1), origin: {{ x: Math.random(), y: -0.1 }} }});
-                    break;
-                case 'fireworks':
-                    const x = Math.random(); const y = Math.random();
-                    confetti({{ ...defaults, particleCount, origin: {{ x, y }}, angle: randomInRange(0, 360), spread: 100, decay: 0.9 }});
-                    break;
-                case 'snow':
-                     confetti({{ ...defaults, particleCount: 1, shapes: ['circle'], colors: ['#FFFFFF'], origin: {{ x: Math.random(), y: -0.1 }}, gravity: 0.1, ticks: 200 }});
-                    break;
-                case 'realistic_look':
-                default:
-                    confetti({{ ...defaults, particleCount, origin: {{ x: randomInRange(0.1, 0.3), y: Math.random() - 0.2 }} }});
-                    confetti({{ ...defaults, particleCount, origin: {{ x: randomInRange(0.7, 0.9), y: Math.random() - 0.2 }} }});
-                    break;
+                case 'celebration': confetti({{ ...defaults, particleCount, origin: {{ x: randomInRange(0.1, 0.9), y: Math.random() - 0.2 }} }}); break;
+                case 'stars': confetti({{ ...defaults, particleCount: 1, shapes: ['star'], gravity: randomInRange(0.4, 0.6), scalar: randomInRange(0.4, 1), origin: {{ x: Math.random(), y: -0.1 }} }}); break;
+                case 'fireworks': const x = Math.random(); const y = Math.random(); confetti({{ ...defaults, particleCount, origin: {{ x, y }}, angle: randomInRange(0, 360), spread: 100, decay: 0.9 }}); break;
+                case 'snow': confetti({{ ...defaults, particleCount: 1, shapes: ['circle'], colors: ['#FFFFFF'], origin: {{ x: Math.random(), y: -0.1 }}, gravity: 0.1, ticks: 200 }}); break;
+                case 'realistic_look': default: confetti({{ ...defaults, particleCount, origin: {{ x: randomInRange(0.1, 0.3), y: Math.random() - 0.2 }} }}); confetti({{ ...defaults, particleCount, origin: {{ x: randomInRange(0.7, 0.9), y: Math.random() - 0.2 }} }}); break;
             }}
         }}, 250);
       }}
@@ -270,9 +341,7 @@ def render_realtime_sales_listener(settings):
       function showToastAndConfetti(row) {{
         if (!APP_SETTINGS.enable_notifications) return;
         
-        // --- BẮT ĐẦU TÍNH NĂNG MỚI: PHÁT ÂM THANH TOAST ---
         playSound(APP_SETTINGS.toast_sound_url);
-        // --- KẾT THÚC TÍNH NĂNG MỚI ---
         
         const div = document.createElement("div");
         const revenue = Number(row.revenue || 0).toFixed(2);
@@ -289,7 +358,7 @@ def render_realtime_sales_listener(settings):
         setTimeout(() => {{
           div.style.animation = "fadeOut 650ms ease-in forwards";
           setTimeout(() => div.remove(), 700);
-        }}, APP_SETTINGS.toast_duration_ms); // Thay đổi từ confetti sang toast duration
+        }}, APP_SETTINGS.toast_duration_ms);
       }}
 
       const KEY = "notified_order_ids_v2";
@@ -316,22 +385,18 @@ def render_realtime_sales_listener(settings):
     """
     html(listener_html, height=0)
 
-# --- KẾT THÚC TÍNH NĂNG MỚI ---
-
 class DashboardUI:
-    def __init__(self, auth, data_processor):
+    def __init__(self, auth, data_processor, config):
         self.auth = auth
         self.processor = data_processor
-        if 'realtime_history' not in st.session_state:
-            st.session_state.realtime_history = []
-        
+        self.config = config
         if 'property_name' not in st.session_state:
-            st.session_state.property_name = config.DEFAULT_PROPERTY_NAME
+            st.session_state.property_name = self.config.DEFAULT_PROPERTY_NAME
 
     def render_sidebar(self):
         with st.sidebar:
             user_info = st.session_state['user_info']
-            avatar_url = user_info.get("avatar_url") or config.default_avatar_url
+            avatar_url = user_info.get("avatar_url") or self.config.default_avatar_url
             st.markdown(f"""
                 <div style="display: flex; flex-direction: column; align-items: center; text-align: center; margin-bottom: 20px;">
                     <img src="{avatar_url}" style="width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 2px solid #3c4043;">
@@ -345,11 +410,14 @@ class DashboardUI:
             
             self.auth.logout("Log Out", "sidebar") 
 
+            # Lấy cài đặt chung NGAY LẬP TỨC để sử dụng cho toàn bộ app
+            app_settings = get_app_settings()
+
             if user_info['role'] == 'admin':
                 st.divider()
                 st.subheader("Admin Controls")
                 
-                property_names = list(config.AVAILABLE_PROPERTIES.keys())
+                property_names = list(self.config.AVAILABLE_PROPERTIES.keys())
                 
                 try:
                     current_index = property_names.index(st.session_state.property_name)
@@ -369,7 +437,7 @@ class DashboardUI:
             
             st.info(f"Viewing data for: **{st.session_state.property_name}**")
 
-            app_settings = get_app_settings()
+            # Chỉ hiển thị form cài đặt cho admin
             if user_info['role'] == 'admin':
                 admin_settings_ui(app_settings)
             
@@ -377,12 +445,12 @@ class DashboardUI:
             effective_user_info = user_info
             if user_info['role'] == 'admin':
                 st.divider()
-                employee_details = {v['username']: v for k, v in config.users_details.items() if v.get('role') == 'employee'}
+                employee_details = {v['username']: v for k, v in self.config.users_details.items() if v.get('role') == 'employee'}
                 options = ["None (View as Admin)"] + list(employee_details.keys())
                 selected_user_name = st.selectbox("Impersonate User", options=options)
                 if selected_user_name != "None (View as Admin)":
                     impersonating = True
-                    effective_user_info = config.get_user_details_by_username(selected_user_name)
+                    effective_user_info = self.config.get_user_details_by_username(selected_user_name)
                     st.info(f"Viewing as **{selected_user_name}**")
             
             debug_mode = st.checkbox("Enable Debug Mode") if user_info['role'] == 'admin' and not impersonating else False
@@ -394,30 +462,18 @@ class DashboardUI:
         
         render_realtime_sales_listener(app_settings)
         
-        current_property_id = config.AVAILABLE_PROPERTIES[st.session_state.property_name]
+        current_property_id = self.config.AVAILABLE_PROPERTIES[st.session_state.property_name]
 
+        # --- THAY ĐỔI: Xóa các widget cài đặt khỏi sidebar vì đã chuyển vào form của admin ---
         with st.sidebar:
             st.divider()
             st.subheader("Dashboard Settings")
-            selected_tz_name = st.selectbox("Select Timezone", options=list(config.TIMEZONE_MAPPINGS.keys()), key="timezone_selector")
-            refresh_interval = st.session_state.get('refresh_interval', 75)
-            if st.session_state['user_info']['role'] == 'admin' and effective_user_info['role'] == 'admin':
-                new_interval = st.number_input("Set Refresh Interval (seconds)", min_value=30, value=refresh_interval, step=15)
-                if new_interval != refresh_interval:
-                    st.session_state.refresh_interval = new_interval
-                    st.rerun()
-                refresh_interval = new_interval
-                time_window_options = [30, 60, 90, 120]
-                current_window = st.session_state.get('time_window', 60)
-                try: default_index = time_window_options.index(current_window)
-                except ValueError: default_index = 1
-                selected_window = st.selectbox("Set Chart Time Window (minutes)", options=time_window_options, index=default_index)
-                if selected_window != current_window:
-                    st.session_state.time_window = selected_window
-                    st.session_state.realtime_history = []
-                    st.rerun()
+            selected_tz_name = st.selectbox("Select Timezone", options=list(self.config.TIMEZONE_MAPPINGS.keys()), key="timezone_selector")
 
-        selected_tz = pytz.timezone(config.TIMEZONE_MAPPINGS[selected_tz_name])
+        # --- THAY ĐỔI: Lấy refresh_interval từ app_settings ---
+        refresh_interval = app_settings.get('refresh_interval', 75)
+        
+        selected_tz = pytz.timezone(self.config.TIMEZONE_MAPPINGS[selected_tz_name])
         timer_placeholder, placeholder = st.empty(), st.empty()
 
         with placeholder.container():
@@ -426,13 +482,13 @@ class DashboardUI:
             st.markdown(f"*Last update: {localized_fetch_time.strftime('%Y-%m-%d %H:%M:%S')}*")
             top_col1, top_col2, top_col3 = st.columns(3)
             with top_col1:
-                bg_color, text_color = get_heatmap_color_and_text(data['active_users_5min'], config.TARGET_USERS_5MIN, config.COLOR_COLD, config.COLOR_HOT)
+                bg_color, text_color = get_heatmap_color_and_text(data['active_users_5min'], self.config.TARGET_USERS_5MIN, self.config.COLOR_COLD, self.config.COLOR_HOT)
                 st.markdown(f"""<div style="background-color: {bg_color}; border-radius: 7px; padding: 20px; text-align: center; height: 100%;"><p style="font-size: 16px; color: {text_color}; margin-bottom: 5px;">ACTIVE USERS (5 MIN)</p><p style="font-size: 32px; font-weight: bold; color: {text_color}; margin: 0;">{data['active_users_5min']}</p></div>""", unsafe_allow_html=True)
             with top_col2:
-                bg_color, text_color = get_heatmap_color_and_text(data['active_users_30min'], config.TARGET_USERS_30MIN, config.COLOR_COLD, config.COLOR_HOT)
+                bg_color, text_color = get_heatmap_color_and_text(data['active_users_30min'], self.config.TARGET_USERS_30MIN, self.config.COLOR_COLD, self.config.COLOR_HOT)
                 st.markdown(f"""<div style="background-color: {bg_color}; border-radius: 7px; padding: 20px; text-align: center; height: 100%;"><p style="font-size: 16px; color: {text_color}; margin-bottom: 5px;">ACTIVE USERS (30 MIN)</p><p style="font-size: 32px; font-weight: bold; color: {text_color}; margin: 0;">{data['active_users_30min']}</p></div>""", unsafe_allow_html=True)
             with top_col3:
-                bg_color, text_color = get_heatmap_color_and_text(data['total_views'], config.TARGET_VIEWS_30MIN, config.COLOR_COLD, config.COLOR_HOT)
+                bg_color, text_color = get_heatmap_color_and_text(data['total_views'], self.config.TARGET_VIEWS_30MIN, self.config.COLOR_COLD, self.config.COLOR_HOT)
                 st.markdown(f"""<div style="background-color: {bg_color}; border-radius: 7px; padding: 20px; text-align: center; height: 100%;"><p style="font-size: 16px; color: {text_color}; margin-bottom: 5px;">VIEWS (30 MIN)</p><p style="font-size: 32px; font-weight: bold; color: {text_color}; margin: 0;">{data['total_views']}</p></div>""", unsafe_allow_html=True)
             st.divider()
             bottom_col1, bottom_col2 = st.columns(2)
@@ -442,7 +498,8 @@ class DashboardUI:
                 cr = (data['purchase_count_30min'] / data['active_users_30min'] * 100) if data['active_users_30min'] > 0 else 0
                 st.markdown(f"""<div style="background-color: #013254; border: 2px solid #0564a8; border-radius: 7px; padding: 20px; text-align: center; height: 100%;"><p style="font-size: 16px; color: #b0b0b0; margin-bottom: 5px;">CONVERSION RATE (30 MIN)</p><p style="font-size: 32px; font-weight: bold; color: #23a7d1; margin: 0;">{cr:.2f}%</p></div>""", unsafe_allow_html=True)
             
-            self._render_realtime_trend_chart(data, localized_fetch_time, refresh_interval, data['purchase_events'])
+            self._render_realtime_trend_chart(data, localized_fetch_time, data['purchase_events'], app_settings)
+            
             self._render_per_minute_chart(data['per_min_df'])
             st.divider()
             st.subheader("Page and screen in last 30 minutes")
@@ -463,28 +520,31 @@ class DashboardUI:
         timer_placeholder.markdown(f'<p style="color:blue;"><b>Refreshing now...</b></p>', unsafe_allow_html=True)
         st.rerun()
 
-    def _render_realtime_trend_chart(self, data, localized_fetch_time, refresh_interval, purchase_events):
+    def _render_realtime_trend_chart(self, data, localized_fetch_time, purchase_events, app_settings):
         if not data['final_pages_df'].empty:
             marketer_summary = data['final_pages_df'].groupby('Marketer')['Active Users'].sum()
             current_snapshot = marketer_summary.to_dict()
         else:
             current_snapshot = {}
-        st.session_state.realtime_history.append({'timestamp': localized_fetch_time, **current_snapshot})
-        time_window_minutes = st.session_state.get('time_window', 60)
-        MAX_HISTORY_POINTS = int((time_window_minutes * 60) / refresh_interval)
-        if len(st.session_state.realtime_history) > MAX_HISTORY_POINTS:
-            st.session_state.realtime_history = st.session_state.realtime_history[-MAX_HISTORY_POINTS:]
-        history_df = pd.DataFrame(st.session_state.realtime_history).set_index('timestamp')
-        history_df_melted = history_df.reset_index().melt(id_vars='timestamp', var_name='Marketer', value_name='Active Users').dropna(subset=['Active Users'])
+
+        if current_snapshot:
+            save_snapshot_to_supabase(current_snapshot, localized_fetch_time)
+
+        # --- THAY ĐỔI: Lấy time_window_hours từ app_settings ---
+        time_window_hours = app_settings.get('time_window_hours', 3)
+        history_df_melted = load_history_from_supabase(time_window_hours)
         
         st.divider()
-        st.subheader(f"Active Users Trend by Marketer (Last {time_window_minutes} minutes)")
+        st.subheader(f"Active Users Trend by Marketer (Last {time_window_hours} hours)")
+
         if not history_df_melted.empty:
+            history_df_melted['timestamp'] = history_df_melted['timestamp'].dt.tz_convert(localized_fetch_time.tzinfo)
+
             fig_trend = px.line(history_df_melted, x='timestamp', y='Active Users', color='Marketer', template='plotly_dark', color_discrete_sequence=px.colors.qualitative.Plotly)
             fig_trend.update_traces(line=dict(width=3))
             fig_trend.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', yaxis=dict(gridcolor='rgba(255,255,255,0.1)'), legend_title_text='', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), hovermode="x unified")
             
-            if not purchase_events.empty and not history_df_melted.empty:
+            if not purchase_events.empty:
                 purchase_events['created_at_local'] = purchase_events['created_at'].dt.tz_convert(localized_fetch_time.tzinfo)
                 merged_events = pd.merge_asof(
                     purchase_events.sort_values('created_at_local'),
@@ -549,13 +609,13 @@ class DashboardUI:
         tokens_hour_remaining = quota_details.get("tokens_per_hour", {}).get("remaining", "N/A")
         q_col1, q_col2 = st.columns(2)
         with q_col1:
-            st.metric("Hourly Tokens", f"{tokens_hour_consumed} / {config.HOURLY_TOKEN_QUOTA}")
+            st.metric("Hourly Tokens", f"{tokens_hour_consumed} / {self.config.HOURLY_TOKEN_QUOTA}")
             st.caption(f"Used in the current hour. Remaining: {tokens_hour_remaining}")
-            render_progress_bar(tokens_hour_consumed, config.HOURLY_TOKEN_QUOTA)
+            render_progress_bar(tokens_hour_consumed, self.config.HOURLY_TOKEN_QUOTA)
         with q_col2:
-            st.metric("Daily Tokens", f"{tokens_day_consumed} / {config.DAILY_TOKEN_QUOTA}")
+            st.metric("Daily Tokens", f"{tokens_day_consumed} / {self.config.DAILY_TOKEN_QUOTA}")
             st.caption(f"Total used today. Resets daily at 14:00 (VN Time). Remaining: {tokens_day_remaining}")
-            render_progress_bar(tokens_day_consumed, config.DAILY_TOKEN_QUOTA)
+            render_progress_bar(tokens_day_consumed, self.config.DAILY_TOKEN_QUOTA)
 
     def _render_realtime_debug_section(self, debug_data, quota_details):
         st.divider()
@@ -576,7 +636,7 @@ class DashboardUI:
     def render_historical_report(self, effective_user_info, debug_mode):
         st.title("📊 Page Performance Report")
         
-        current_property_id = config.AVAILABLE_PROPERTIES[st.session_state.property_name]
+        current_property_id = self.config.AVAILABLE_PROPERTIES[st.session_state.property_name]
 
         col1, col2 = st.columns(2)
         with col1:
