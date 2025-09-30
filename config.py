@@ -24,7 +24,7 @@ class AppConfig:
         print(f"!!! SCRIPT IS RUNNING FROM THIS DIRECTORY: {os.getcwd()}")
         st_data = {}
         try:
-            if hasattr(st, "secrets") and len(st.secrets.items()) > 0:
+            if hasattr(st, "secrets") and st.secrets:
                 print("--- Loading secrets from st.secrets ---")
                 st_data = dict(st.secrets)
         except Exception as e:
@@ -50,35 +50,24 @@ class AppConfig:
             print("--- No secrets found by any method ---")
         return merged
     
-    # --- BẮT ĐẦU SỬA LỖI THEO TƯ VẤN MỚI CỦA CHUYÊN GIA ---
     def refresh_supabase_from_secrets(self):
-        """
-        Sửa lỗi: Tách việc lấy URL/key và việc tạo server client.
-        Nếu create_client lỗi, UI vẫn có đủ thông tin để chạy.
-        """
-        # 1. Luôn cập nhật URL/anon_key từ secrets, bất kể server client có tạo được hay không
         supa_config = self.secrets.get("supabase", {})
         self.supabase_url = supa_config.get("url")
         self.supabase_anon_key = supa_config.get("anon_key")
 
-        # 2. Chỉ bao quanh việc tạo server client bằng try/except
         self.supabase = None
         service_role_key = supa_config.get("service_role_key")
         try:
             if self.supabase_url and service_role_key:
                 self.supabase = create_client(self.supabase_url, service_role_key)
         except Exception as e:
-            # Lỗi này giờ đây không còn nghiêm trọng, chỉ in ra cảnh báo
             print(f"[config_refresh] WARNING: Supabase server client creation failed, but preserving URL/anon for UI. Error: {e}")
         
-        # Log trạng thái cuối cùng
         print(f"[config_refresh] Supabase URL present: {bool(self.supabase_url)}, anon key present: {bool(self.supabase_anon_key)}, server client: {bool(self.supabase)}")
-    # --- KẾT THÚC SỬA LỖI ---
         
     def __init__(self) -> None:
-        # Giữ nguyên phần khởi tạo khác
         self.secrets = self._load_secrets()
-        self.AVAILABLE_PROPERTIES = { "Trang Web Chính (PropeLify)": "501726461", "Trang Web Test": "506473229", "Ứng dụng Mobile": "ID_CUA_UNG_DUNG_MOBILE" }
+        self.AVAILABLE_PROPERTIES = { "Trang Web Chính (PropeLify)": "506473229", "Trang Web Test": "501726461", "Ứng dụng Mobile": "ID_CUA_UNG_DUNG_MOBILE" }
         self.DEFAULT_PROPERTY_NAME = "Trang Web Chính (PropeLify)"
         self.HOURLY_TOKEN_QUOTA = 5000
         self.DAILY_TOKEN_QUOTA = 25000
@@ -143,5 +132,16 @@ class AppConfig:
                 return user_info
         return None
 
-# Singleton config
-config = AppConfig()
+# --- BẮT ĐẦU SỬA LỖI ---
+# Thay thế @st.singleton bằng @st.cache_resource
+# Đây là cách làm đúng và hiện đại để khởi tạo các đối tượng "tài nguyên"
+# như kết nối database hoặc config object.
+@st.cache_resource
+def get_config():
+    """
+    Tạo và trả về một instance duy nhất của AppConfig cho mỗi session.
+    Hàm này được cache lại để đảm bảo AppConfig chỉ được khởi tạo một lần.
+    """
+    print("--- Initializing AppConfig resource ---")
+    return AppConfig()
+# --- KẾT THÚC SỬA LỖI ---
