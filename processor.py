@@ -5,13 +5,10 @@ import numpy as np
 import streamlit as st
 from datetime import datetime, timezone
 import re
-# --- THAY ĐỔI ---
-# Không import config trực tiếp nữa
-# --- KẾT THÚC THAY ĐỔI ---
+from config import get_config
 from services import GoogleAnalyticsService, ShopifyService
 
 class DataProcessor:
-    # --- THAY ĐỔI: Nhận config trong __init__ ---
     def __init__(self, ga_service: GoogleAnalyticsService, shopify_service: ShopifyService, config):
         self.ga_service = ga_service
         self.shopify_service = shopify_service
@@ -104,7 +101,14 @@ class DataProcessor:
         per_min_data = {str(i): per_min_summary.get(i, 0) for i in range(30)}
         per_min_df = pd.DataFrame([{"Time": f"-{int(k)} min", "Active Users": v} for k, v in sorted(per_min_data.items(), key=lambda item: int(item[0]))])
         
-        ga_pages_df = ga_raw_df.groupby("Page Title and Screen Class").agg(ActiveUsers=('Active Users', 'sum')).reset_index()
+        # --- BẮT ĐẦU THAY ĐỔI 1 ---
+        # Thêm 'Views' vào phần tổng hợp dữ liệu từ Google Analytics
+        ga_pages_df = ga_raw_df.groupby("Page Title and Screen Class").agg(
+            ActiveUsers=('Active Users', 'sum'),
+            Views=('Views', 'sum')
+        ).reset_index()
+        # --- KẾT THÚC THAY ĐỔI 1 ---
+        
         ga_processed_df = ga_pages_df.copy()
         ga_processed_df[['core_title', 'symbol']] = ga_processed_df['Page Title and Screen Class'].apply(lambda x: pd.Series(self._extract_core_and_symbol(x, self.symbols)))
         
@@ -132,7 +136,13 @@ class DataProcessor:
 
         merged_df["Purchases"] = merged_df["Purchases"].fillna(0).astype(int)
         merged_df["Revenue"] = merged_df["Revenue"].fillna(0).astype(float)
-        merged_df["CR"] = np.divide(merged_df["Purchases"], merged_df["ActiveUsers"], out=np.zeros_like(merged_df["ActiveUsers"], dtype=float), where=(merged_df["ActiveUsers"] != 0)) * 100
+        
+        # --- BẮT ĐẦU THAY ĐỔI 2 ---
+        # Đổi tên "CR" thành "User CR" và thêm cột "View CR"
+        merged_df["User CR"] = np.divide(merged_df["Purchases"], merged_df["ActiveUsers"], out=np.zeros_like(merged_df["ActiveUsers"], dtype=float), where=(merged_df["ActiveUsers"] != 0)) * 100
+        merged_df["View CR"] = np.divide(merged_df["Purchases"], merged_df["Views"], out=np.zeros_like(merged_df["Views"], dtype=float), where=(merged_df["Views"] != 0)) * 100
+        # --- KẾT THÚC THAY ĐỔI 2 ---
+        
         merged_df['Marketer'] = merged_df['Page Title and Screen Class'].apply(self.get_marketer_from_page_title)
         
         def format_timestamp_to_hms(ts):
@@ -142,11 +152,14 @@ class DataProcessor:
         
         merged_df['Last Purchase'] = merged_df['LastPurchaseTime'].apply(format_timestamp_to_hms)
         
+        # --- BẮT ĐẦU THAY ĐỔI 3 ---
+        # Cập nhật lại danh sách và thứ tự các cột để hiển thị
         final_pages_df = merged_df.sort_values(by="ActiveUsers", ascending=False).rename(
             columns={"ActiveUsers": "Active Users"}
         )[
-            ["Page Title and Screen Class", "Marketer", "Active Users", "Purchases", "Last Purchase", "Revenue", "CR"]
+            ["Page Title and Screen Class", "Marketer", "Active Users", "Views", "Purchases", "Last Purchase", "Revenue", "User CR", "View CR"]
         ]
+        # --- KẾT THÚC THAY ĐỔI 3 ---
 
         debug_data = {
             "ga_raw": ga_raw_df, "shopify_raw": shopify_raw_df,
