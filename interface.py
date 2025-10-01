@@ -11,8 +11,7 @@ from datetime import datetime, timedelta, timezone
 from config import get_config
 from streamlit.components.v1 import html
 import json
-
-# --- THAY ĐỔI: Bỏ thư viện random vì không còn dọn dẹp ngẫu nhiên ---
+import random
 
 @st.cache_data(ttl=60)
 def load_history_from_supabase(time_window_hours):
@@ -21,12 +20,12 @@ def load_history_from_supabase(time_window_hours):
     """
     try:
         config = get_config()
-        # --- THAY ĐỔI: Sử dụng hours thay vì minutes ---
         start_time = datetime.now(timezone.utc) - timedelta(hours=time_window_hours)
         
         response = config.supabase.table("realtime_history").select("timestamp, snapshot_data") \
             .gte("timestamp", start_time.isoformat()) \
             .order("timestamp", desc=False) \
+            .limit(5000) \
             .execute()
 
         if not response.data:
@@ -63,7 +62,17 @@ def save_snapshot_to_supabase(snapshot_data, timestamp):
     except Exception as e:
         print(f"Error saving snapshot to Supabase: {e}")
 
-# --- THAY ĐỔI: Xóa hàm cleanup_old_history_supabase() vì đã dùng Cron Job ---
+def cleanup_old_history_supabase():
+    """
+    Xóa các bản ghi cũ hơn 25 giờ để giữ cho database gọn nhẹ.
+    """
+    try:
+        config = get_config()
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=25)
+        config.supabase.table("realtime_history").delete().lt("created_at", cutoff_time.isoformat()).execute()
+        print("Successfully cleaned up old history records.")
+    except Exception as e:
+        print(f"Error during history cleanup: {e}")
 
 def highlight_metrics(val):
     if isinstance(val, (int, float)) and val > 0:
@@ -111,13 +120,11 @@ def get_app_settings():
     """Đọc cài đặt toàn cục của ứng dụng từ Supabase."""
     try:
         config = get_config()
-        # Lấy tất cả các cột, bao gồm cả các cột mới
         response = config.supabase.table("app_settings").select("*").eq("id", 1).single().execute()
         if response.data:
             return response.data
     except Exception as e:
         st.error(f"Could not load app settings: {e}")
-    # Trả về giá trị mặc định nếu có lỗi, bao gồm cả các giá trị mới
     return {
         "enable_notifications": True,
         "enable_confetti": True,
@@ -138,10 +145,8 @@ def admin_settings_ui(current_settings):
     with st.form("app_settings_form"):
         st.write("Control global settings for all users.")
         
-        # --- BẮT ĐẦU TÍNH NĂNG MỚI: Cài đặt chung ---
         st.write("**Realtime Dashboard Settings**")
         
-        # Lấy giá trị hiện tại từ settings, nếu không có thì dùng mặc định
         current_interval = current_settings.get("refresh_interval", 75)
         new_interval = st.number_input(
             "Refresh Interval (seconds)", 
@@ -156,7 +161,7 @@ def admin_settings_ui(current_settings):
         try:
             default_index = time_window_options.index(current_window_hours)
         except ValueError:
-            default_index = 1 # Mặc định là 3 giờ
+            default_index = 1
 
         selected_window_hours = st.selectbox(
             "Chart Time Window (hours)", 
@@ -167,7 +172,6 @@ def admin_settings_ui(current_settings):
         
         st.divider()
         st.write("**Notification & Effect Settings**")
-        # --- KẾT THÚC TÍNH NĂNG MỚI ---
 
         enable_notifications = st.toggle(
             "Enable Sale Notifications", 
@@ -208,7 +212,6 @@ def admin_settings_ui(current_settings):
         submitted = st.form_submit_button("Save All Settings", use_container_width=True)
         
         if submitted:
-            # Gom tất cả các cài đặt mới vào một dictionary để update
             new_settings = {
                 "refresh_interval": new_interval,
                 "time_window_hours": selected_window_hours,
@@ -221,7 +224,6 @@ def admin_settings_ui(current_settings):
             }
             try:
                 config = get_config()
-                # Update tất cả các cài đặt lên Supabase một lần duy nhất
                 config.supabase.table("app_settings").update(new_settings).eq("id", 1).execute()
                 st.success("Global settings updated successfully!")
                 st.cache_data.clear()
@@ -410,7 +412,6 @@ class DashboardUI:
             
             self.auth.logout("Log Out", "sidebar") 
 
-            # Lấy cài đặt chung NGAY LẬP TỨC để sử dụng cho toàn bộ app
             app_settings = get_app_settings()
 
             if user_info['role'] == 'admin':
@@ -437,7 +438,6 @@ class DashboardUI:
             
             st.info(f"Viewing data for: **{st.session_state.property_name}**")
 
-            # Chỉ hiển thị form cài đặt cho admin
             if user_info['role'] == 'admin':
                 admin_settings_ui(app_settings)
             
@@ -464,13 +464,11 @@ class DashboardUI:
         
         current_property_id = self.config.AVAILABLE_PROPERTIES[st.session_state.property_name]
 
-        # --- THAY ĐỔI: Xóa các widget cài đặt khỏi sidebar vì đã chuyển vào form của admin ---
         with st.sidebar:
             st.divider()
             st.subheader("Dashboard Settings")
             selected_tz_name = st.selectbox("Select Timezone", options=list(self.config.TIMEZONE_MAPPINGS.keys()), key="timezone_selector")
 
-        # --- THAY ĐỔI: Lấy refresh_interval từ app_settings ---
         refresh_interval = app_settings.get('refresh_interval', 75)
         
         selected_tz = pytz.timezone(self.config.TIMEZONE_MAPPINGS[selected_tz_name])
@@ -530,7 +528,9 @@ class DashboardUI:
         if current_snapshot:
             save_snapshot_to_supabase(current_snapshot, localized_fetch_time)
 
-        # --- THAY ĐỔI: Lấy time_window_hours từ app_settings ---
+        if random.random() < 0.1:
+            cleanup_old_history_supabase()
+
         time_window_hours = app_settings.get('time_window_hours', 3)
         history_df_melted = load_history_from_supabase(time_window_hours)
         
@@ -587,11 +587,15 @@ class DashboardUI:
             marketer_id = effective_user_info['marketer_id']
             pages_to_display = pages_df_full[pages_df_full['Marketer'] == marketer_id]
         if not pages_to_display.empty:
+            # --- BẮT ĐẦU THAY ĐỔI 4 ---
+            # Cập nhật format và style để bao gồm các cột mới
             styler = pages_to_display.style.format({
-                'CR': "{:.2f}%", 
+                'User CR': "{:.2f}%",
+                'View CR': "{:.2f}%",
                 'Revenue': "${:,.2f}"
             })
-            styler.apply(lambda x: x.map(highlight_metrics) if x.name in ['Purchases', 'Revenue', 'CR', 'Last Purchase'] else [''] * len(x), axis=0)
+            styler.apply(lambda x: x.map(highlight_metrics) if x.name in ['Purchases', 'Revenue', 'User CR', 'View CR', 'Last Purchase'] else [''] * len(x), axis=0)
+            # --- KẾT THÚC THAY ĐỔI 4 ---
             st.dataframe(
                 styler,
                 use_container_width=True,
