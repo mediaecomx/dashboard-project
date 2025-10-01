@@ -418,18 +418,29 @@ class DashboardUI:
                 st.divider()
                 st.subheader("Admin Controls")
                 
-                property_names = list(self.config.AVAILABLE_PROPERTIES.keys())
+                # --- BẮT ĐẦU THAY ĐỔI ---
+                # Tạo một dictionary để map từ chuỗi hiển thị về tên property gốc
+                display_to_name_map = {f"{name}: {id}": name for name, id in self.config.AVAILABLE_PROPERTIES.items()}
+                # Tạo danh sách các chuỗi để hiển thị cho người dùng
+                display_options = list(display_to_name_map.keys())
                 
+                # Tìm chuỗi hiển thị tương ứng với property đang được chọn trong session_state
                 try:
-                    current_index = property_names.index(st.session_state.property_name)
-                except ValueError:
+                    current_display_value = next(key for key, value in display_to_name_map.items() if value == st.session_state.property_name)
+                    current_index = display_options.index(current_display_value)
+                except (StopIteration, ValueError):
                     current_index = 0
 
-                selected_property_name = st.selectbox(
-                    "Select Google Analytics Property", 
-                    options=property_names,
+                # Dùng danh sách hiển thị mới cho st.selectbox
+                selected_display_name = st.selectbox(
+                    "Select Google Analytics Property",
+                    options=display_options,
                     index=current_index
                 )
+
+                # Chuyển đổi từ chuỗi hiển thị được chọn trở lại tên property gốc để lưu
+                selected_property_name = display_to_name_map[selected_display_name]
+                # --- KẾT THÚC THAY ĐỔI ---
                 
                 if selected_property_name != st.session_state.property_name:
                     st.session_state.property_name = selected_property_name
@@ -587,15 +598,12 @@ class DashboardUI:
             marketer_id = effective_user_info['marketer_id']
             pages_to_display = pages_df_full[pages_df_full['Marketer'] == marketer_id]
         if not pages_to_display.empty:
-            # --- BẮT ĐẦU THAY ĐỔI 4 ---
-            # Cập nhật format và style để bao gồm các cột mới
             styler = pages_to_display.style.format({
                 'User CR': "{:.2f}%",
                 'View CR': "{:.2f}%",
                 'Revenue': "${:,.2f}"
             })
             styler.apply(lambda x: x.map(highlight_metrics) if x.name in ['Purchases', 'Revenue', 'User CR', 'View CR', 'Last Purchase'] else [''] * len(x), axis=0)
-            # --- KẾT THÚC THAY ĐỔI 4 ---
             st.dataframe(
                 styler,
                 use_container_width=True,
