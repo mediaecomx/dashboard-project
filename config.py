@@ -90,7 +90,7 @@ class AppConfig:
             self.SYMBOLS = sorted(list(self.page_title_map.keys()), key=len, reverse=True)
         except Exception:
             pass
-        self.default_avatar_url = "https://i.ibb.co/wN8TsVMW/avatar.jpg"
+        self.default_avatar_url = "https://raw.githubusercontent.com/mediaecomx/dashboard-project/refs/heads/main/profile.jpg"
         self.ga_credentials = None
         try:
             if "google_credentials" in self.secrets:
