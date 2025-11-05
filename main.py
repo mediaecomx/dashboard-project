@@ -8,15 +8,26 @@ from processor import DataProcessor
 from interface import DashboardUI
 
 def fetch_and_set_avatar(username: str, config):
-    if 'avatar_url' not in st.session_state or not st.session_state['avatar_url']:
-        try:
-            profile_data = config.supabase.table("profiles").select("avatar_url").eq("username", username).single().execute()
-            if profile_data.data and profile_data.data.get('avatar_url'):
-                st.session_state['avatar_url'] = profile_data.data.get('avatar_url')
-            else:
-                st.session_state['avatar_url'] = config.default_avatar_url
-        except Exception:
+    """
+    Hàm này lấy avatar từ Supabase. Nếu người dùng chưa có avatar trên Supabase,
+    nó sẽ sử dụng avatar mặc định từ file config.
+    Kết quả luôn được cập nhật vào st.session_state['avatar_url'].
+    """
+    try:
+        # Luôn cố gắng truy vấn Supabase để lấy avatar mới nhất của người dùng
+        profile_data = config.supabase.table("profiles").select("avatar_url").eq("username", username).single().execute()
+        
+        # Nếu có dữ liệu và có avatar_url trong đó...
+        if profile_data.data and profile_data.data.get('avatar_url'):
+            # ... thì cập nhật session state bằng link avatar đó.
+            st.session_state['avatar_url'] = profile_data.data.get('avatar_url')
+        else:
+            # Nếu không, dùng link avatar mặc định từ config.
             st.session_state['avatar_url'] = config.default_avatar_url
+    except Exception:
+        # Nếu có bất kỳ lỗi nào xảy ra (ví dụ: mất kết nối),
+        # an toàn nhất là dùng link mặc định.
+        st.session_state['avatar_url'] = config.default_avatar_url
 
 def main():
     """
@@ -46,6 +57,9 @@ def main():
         if not user_full_details:
             st.error("Không tìm thấy thông tin chi tiết cho người dùng. Vui lòng liên hệ quản trị viên.")
             st.stop()
+
+        # Hàm fetch_and_set_avatar giờ sẽ được gọi mỗi khi rerun
+        fetch_and_set_avatar(username, config)
         
         # THAY ĐỔI: Truyền config vào hàm
         fetch_and_set_avatar(username, config)
