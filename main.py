@@ -2,14 +2,11 @@
 
 import streamlit as st
 import streamlit_authenticator as stauth
-# --- THAY ĐỔI ---
 from config import get_config
-# --- KẾT THÚC THAY ĐỔI ---
 from services import GoogleAnalyticsService, ShopifyService
 from processor import DataProcessor
 from interface import DashboardUI
 
-# THAY ĐỔI: config giờ đây được truyền vào làm tham số
 def fetch_and_set_avatar(username: str, config):
     if 'avatar_url' not in st.session_state or not st.session_state['avatar_url']:
         try:
@@ -28,11 +25,9 @@ def main():
     st.set_page_config(layout="wide")
     st.markdown("""<style>.stApp{background-color:black;color:white;}.stMetric{color:white;}.stDataFrame{color:white;}.stPlotlyChart{background-color:transparent;}.block-container{padding-top: 2rem; padding-bottom: 2rem; padding-left: 5rem; padding-right: 5rem;}</style>""", unsafe_allow_html=True)
     
-    # --- BẮT ĐẦU SỬA LỖI ---
     # Lấy đối tượng config một cách an toàn bằng hàm mới.
     # Lệnh này sẽ chạy sau khi Streamlit đã khởi tạo xong session.
     config = get_config()
-    # --- KẾT THÚC SỬA LỖI ---
 
     authenticator = stauth.Authenticate(
         config.auth_config['credentials'],
@@ -62,7 +57,6 @@ def main():
             "avatar_url": st.session_state.get('avatar_url')
         }
         
-        # THAY ĐỔI: Truyền config vào các service và processor
         ga_service = GoogleAnalyticsService(config)
         shopify_service = ShopifyService(config)
         data_processor = DataProcessor(ga_service, shopify_service, config)
