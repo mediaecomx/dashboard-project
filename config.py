@@ -67,8 +67,8 @@ class AppConfig:
         
     def __init__(self) -> None:
         self.secrets = self._load_secrets()
-        self.AVAILABLE_PROPERTIES = { "Trang Web Chính (PropeLify)": "501726461", "Trang Web Test": "506473229", "Ứng dụng Mobile": "ID_CUA_UNG_DUNG_MOBILE" }
-        self.DEFAULT_PROPERTY_NAME = "Trang Web Chính (PropeLify)"
+        self.AVAILABLE_PROPERTIES = { "PropeLify": "506473229", "OakHaven": "508203423", "Test": "ID_Test" }
+        self.DEFAULT_PROPERTY_NAME = "PropeLify"
         self.HOURLY_TOKEN_QUOTA = 5000
         self.DAILY_TOKEN_QUOTA = 25000
         self.TARGET_USERS_5MIN = 50
@@ -132,10 +132,6 @@ class AppConfig:
                 return user_info
         return None
 
-# --- BẮT ĐẦU SỬA LỖI ---
-# Thay thế @st.singleton bằng @st.cache_resource
-# Đây là cách làm đúng và hiện đại để khởi tạo các đối tượng "tài nguyên"
-# như kết nối database hoặc config object.
 @st.cache_resource
 def get_config():
     """
@@ -144,4 +140,3 @@ def get_config():
     """
     print("--- Initializing AppConfig resource ---")
     return AppConfig()
-# --- KẾT THÚC SỬA LỖI ---
