@@ -67,7 +67,7 @@ class AppConfig:
         
     def __init__(self) -> None:
         self.secrets = self._load_secrets()
-        self.AVAILABLE_PROPERTIES = { "PropeLify": "506473229", "OakHaven": "508203423", "Test": "ID_Test" }
+        self.AVAILABLE_PROPERTIES = { "PropeLify": "501726461", "OakHaven": "508203423", "Test": "ID_Test" }
         self.DEFAULT_PROPERTY_NAME = "PropeLify"
         self.HOURLY_TOKEN_QUOTA = 5000
         self.DAILY_TOKEN_QUOTA = 25000
