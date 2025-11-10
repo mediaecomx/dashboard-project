@@ -87,8 +87,8 @@ def get_heatmap_color_and_text(value, target, cold_color, hot_color):
     else:
         ratio = min(1.0, value / target)
         r = int(cold_color[0] + ratio * (hot_color[0] - cold_color[0]))
-        g = int(cold_color[1] + ratio * (hot_color[1] - cold_color[1]))
-        b = int(cold_color[2] + ratio * (hot_color[2] - cold_color[2]))
+        g = int(cold_color[1] + ratio * (hot_color[1] - hot_color[1]))
+        b = int(cold_color[2] + ratio * (hot_color[2] - hot_color[2]))
         bg_rgb = (r, g, b)
     brightness = (bg_rgb[0] * 299 + bg_rgb[1] * 587 + bg_rgb[2] * 114) / 1000
     text_color = "#FFFFFF" if brightness < 140 else "#000000"
@@ -348,10 +348,11 @@ def render_realtime_sales_listener(settings):
         const div = document.createElement("div");
         const revenue = Number(row.revenue || 0).toFixed(2);
         const title = row.product_title || "New Shopify order";
-        const marketer = row.marketer || "Marketing";
+        const storeName = row.store_name || "New Sale";
         const symbol = row.product_symbol || "🛒";
+        
         div.className = "sale-toast";
-        div.innerHTML = `<strong>${{symbol}} ${{marketer}}</strong> &bull; $${{revenue}}<br/><span>${{title}}</span>`;
+        div.innerHTML = `<strong>${{symbol}} ${{storeName}}</strong> &bull; $${{revenue}}<br/><span>${{title}}</span>`;
         
         document.getElementById('toast-container').appendChild(div);
         
@@ -392,8 +393,11 @@ class DashboardUI:
         self.auth = auth
         self.processor = data_processor
         self.config = config
-        if 'property_name' not in st.session_state:
-            st.session_state.property_name = self.config.DEFAULT_PROPERTY_NAME
+        # --- BẮT ĐẦU THAY ĐỔI 1 ---
+        # Khởi tạo session state cho danh sách các property
+        if 'property_names' not in st.session_state:
+            st.session_state.property_names = [self.config.DEFAULT_PROPERTY_NAME]
+        # --- KẾT THÚC THAY ĐỔI 1 ---
 
     def render_sidebar(self):
         with st.sidebar:
@@ -408,7 +412,13 @@ class DashboardUI:
             """, unsafe_allow_html=True)
             
             st.title("Navigation")
-            page = st.radio("Choose a report:", ("Realtime Dashboard", "Landing Page Report", "Profile"))
+            # --- BẮT ĐẦU THAY ĐỔI 2 ---
+            # Tạm thời khóa báo cáo lịch sử nếu chọn nhiều property
+            # vì hàm đó chưa được nâng cấp để xử lý nhiều property
+            is_multiselect = len(st.session_state.get('property_names', [])) > 1
+            report_options = ("Realtime Dashboard", "Profile") if is_multiselect else ("Realtime Dashboard", "Landing Page Report", "Profile")
+            page = st.radio("Choose a report:", report_options, help="Landing Page Report is only available when a single GA Property is selected." if is_multiselect else "")
+            # --- KẾT THÚC THAY ĐỔI 2 ---
             
             self.auth.logout("Log Out", "sidebar") 
 
@@ -418,37 +428,35 @@ class DashboardUI:
                 st.divider()
                 st.subheader("Admin Controls")
                 
-                # --- BẮT ĐẦU THAY ĐỔI ---
-                # Tạo một dictionary để map từ chuỗi hiển thị về tên property gốc
-                display_to_name_map = {f"{name}: {id}": name for name, id in self.config.AVAILABLE_PROPERTIES.items()}
-                # Tạo danh sách các chuỗi để hiển thị cho người dùng
-                display_options = list(display_to_name_map.keys())
+                # --- BẮT ĐẦU THAY ĐỔI 3 ---
+                # Thay thế selectbox bằng multiselect
+                options = list(self.config.AVAILABLE_PROPERTIES.keys())
                 
-                # Tìm chuỗi hiển thị tương ứng với property đang được chọn trong session_state
-                try:
-                    current_display_value = next(key for key, value in display_to_name_map.items() if value == st.session_state.property_name)
-                    current_index = display_options.index(current_display_value)
-                except (StopIteration, ValueError):
-                    current_index = 0
-
-                # Dùng danh sách hiển thị mới cho st.selectbox
-                selected_display_name = st.selectbox(
-                    "Select Google Analytics Property",
-                    options=display_options,
-                    index=current_index
+                selected_names = st.multiselect(
+                    "Select Google Analytics Properties",
+                    options=options,
+                    default=st.session_state.property_names
                 )
 
-                # Chuyển đổi từ chuỗi hiển thị được chọn trở lại tên property gốc để lưu
-                selected_property_name = display_to_name_map[selected_display_name]
-                # --- KẾT THÚC THAY ĐỔI ---
-                
-                if selected_property_name != st.session_state.property_name:
-                    st.session_state.property_name = selected_property_name
-                    st.cache_data.clear() 
-                    st.rerun() 
+                # Kiểm tra nếu lựa chọn thay đổi thì rerun
+                if sorted(selected_names) != sorted(st.session_state.property_names):
+                    st.session_state.property_names = selected_names
+                    st.cache_data.clear()
+                    st.rerun()
+                # --- KẾT THÚC THAY ĐỔI 3 ---
             
-            st.info(f"Viewing data for: **{st.session_state.property_name}**")
+            # --- BẮT ĐẦU THAY ĐỔI 4 ---
+            # Cập nhật thông báo hiển thị
+            if st.session_state.property_names:
+                st.info(f"Viewing data for: **{', '.join(st.session_state.property_names)}**")
+            else:
+                st.warning("No GA Property selected.")
+            # --- KẾT THÚC THAY ĐỔI 4 ---
 
+            # Báo cáo lịch sử sẽ chỉ hoạt động với property đầu tiên trong danh sách
+            if page == "Landing Page Report" and st.session_state.property_names:
+                st.session_state.property_name = st.session_state.property_names[0]
+            
             if user_info['role'] == 'admin':
                 admin_settings_ui(app_settings)
             
@@ -473,7 +481,11 @@ class DashboardUI:
         
         render_realtime_sales_listener(app_settings)
         
-        current_property_id = self.config.AVAILABLE_PROPERTIES[st.session_state.property_name]
+        # --- BẮT ĐẦU THAY ĐỔI 5 ---
+        # Lấy danh sách các ID property đã chọn
+        selected_property_names = st.session_state.get('property_names', [])
+        current_property_ids = [self.config.AVAILABLE_PROPERTIES[name] for name in selected_property_names if name in self.config.AVAILABLE_PROPERTIES]
+        # --- KẾT THÚC THAY ĐỔI 5 ---
 
         with st.sidebar:
             st.divider()
@@ -486,18 +498,21 @@ class DashboardUI:
         timer_placeholder, placeholder = st.empty(), st.empty()
 
         with placeholder.container():
-            data = self.processor.get_processed_realtime_data(current_property_id, selected_tz)
+            # --- BẮT ĐẦU THAY ĐỔI 6 ---
+            # Truyền danh sách ID vào processor
+            data = self.processor.get_processed_realtime_data(current_property_ids, selected_tz)
+            # --- KẾT THÚC THAY ĐỔI 6 ---
             localized_fetch_time = data['fetch_time'].astimezone(selected_tz)
             st.markdown(f"*Last update: {localized_fetch_time.strftime('%Y-%m-%d %H:%M:%S')}*")
             top_col1, top_col2, top_col3 = st.columns(3)
             with top_col1:
-                bg_color, text_color = get_heatmap_color_and_text(data['active_users_5min'], self.config.TARGET_USERS_5MIN, self.config.COLOR_COLD, self.config.COLOR_HOT)
+                bg_color, text_color = get_heatmap_color_and_text(data['active_users_5min'], self.config.TARGET_USERS_5MIN * len(current_property_ids), self.config.COLOR_COLD, self.config.COLOR_HOT)
                 st.markdown(f"""<div style="background-color: {bg_color}; border-radius: 7px; padding: 20px; text-align: center; height: 100%;"><p style="font-size: 16px; color: {text_color}; margin-bottom: 5px;">ACTIVE USERS (5 MIN)</p><p style="font-size: 32px; font-weight: bold; color: {text_color}; margin: 0;">{data['active_users_5min']}</p></div>""", unsafe_allow_html=True)
             with top_col2:
-                bg_color, text_color = get_heatmap_color_and_text(data['active_users_30min'], self.config.TARGET_USERS_30MIN, self.config.COLOR_COLD, self.config.COLOR_HOT)
+                bg_color, text_color = get_heatmap_color_and_text(data['active_users_30min'], self.config.TARGET_USERS_30MIN * len(current_property_ids), self.config.COLOR_COLD, self.config.COLOR_HOT)
                 st.markdown(f"""<div style="background-color: {bg_color}; border-radius: 7px; padding: 20px; text-align: center; height: 100%;"><p style="font-size: 16px; color: {text_color}; margin-bottom: 5px;">ACTIVE USERS (30 MIN)</p><p style="font-size: 32px; font-weight: bold; color: {text_color}; margin: 0;">{data['active_users_30min']}</p></div>""", unsafe_allow_html=True)
             with top_col3:
-                bg_color, text_color = get_heatmap_color_and_text(data['total_views'], self.config.TARGET_VIEWS_30MIN, self.config.COLOR_COLD, self.config.COLOR_HOT)
+                bg_color, text_color = get_heatmap_color_and_text(data['total_views'], self.config.TARGET_VIEWS_30MIN * len(current_property_ids), self.config.COLOR_COLD, self.config.COLOR_HOT)
                 st.markdown(f"""<div style="background-color: {bg_color}; border-radius: 7px; padding: 20px; text-align: center; height: 100%;"><p style="font-size: 16px; color: {text_color}; margin-bottom: 5px;">VIEWS (30 MIN)</p><p style="font-size: 32px; font-weight: bold; color: {text_color}; margin: 0;">{data['total_views']}</p></div>""", unsafe_allow_html=True)
             st.divider()
             bottom_col1, bottom_col2 = st.columns(2)
@@ -648,6 +663,7 @@ class DashboardUI:
     def render_historical_report(self, effective_user_info, debug_mode):
         st.title("📊 Page Performance Report")
         
+        # Báo cáo lịch sử sẽ chỉ dùng property đầu tiên trong danh sách
         current_property_id = self.config.AVAILABLE_PROPERTIES[st.session_state.property_name]
 
         col1, col2 = st.columns(2)
