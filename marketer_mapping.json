@@ -18,7 +18,17 @@
     "MKT11": "MKT11",
     "MKT12": "MKT12",
     "MKT14": "MKT14",
-    "MKT16": "MKT16"
+    "MKT16": "MKT16",
+
+    "🧘": "MKT1",
+    "🚭": "MKT2",
+    "💚": "MKT6",
+    "💎": "MKT7",
+    "✨": "MKT9",
+    "🪴": "MKT11",
+    "🍀": "MKT12",
+    "🛡️": "MKT14",
+    "🌳": "MKT16"
   },
   
   "landing_page_mapping": {
@@ -31,12 +41,24 @@
     "sku-mkt11": "MKT11",
     "sku-mkt12": "MKT12",
     "sku-mkt14": "MKT14",
-    "sku-mkt16": "MKT16"
+    "sku-mkt16": "MKT16",
+
+    "mkt1": "MKT1",
+    "mkt2": "MKT2",
+    "mkt5": "MKT5",
+    "mkt6": "MKT6",
+    "mkt7": "MKT7",
+    "mkt9": "MKT9",
+    "mkt11": "MKT11",
+    "mkt12": "MKT12",
+    "mkt14": "MKT14",
+    "mkt16": "MKT16"
   },
 
   "product_to_symbol_mapping": {
     "128 Hz Healing Instrument": "🌱",
     "Hidden Camera Detector": "📹",
-    "Simulated Awesome Product": "🧪"
+    "Simulated Awesome Product": "🧪",
+    "Resistance Breathing Necklace": "🌿"
   }
 }
