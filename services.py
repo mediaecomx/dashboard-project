@@ -10,12 +10,8 @@ from google.analytics.data_v1beta.types import (
     RunRealtimeReportRequest, RunReportRequest, Dimension, Metric, MinuteRange,
     DateRange
 )
-# --- THAY ĐỔI ---
-# Không import config trực tiếp nữa
-# --- KẾT THÚC THAY ĐỔI ---
 
 class GoogleAnalyticsService:
-    # --- THAY ĐỔI: Nhận config trong __init__ ---
     def __init__(self, config):
         self.client = BetaAnalyticsDataClient(credentials=config.ga_credentials)
 
@@ -81,99 +77,121 @@ class GoogleAnalyticsService:
             return pd.DataFrame()
 
 class ShopifyService:
-    # --- THAY ĐỔI: Nhận config trong __init__ ---
     def __init__(self, config):
-        self.creds = config.shopify_creds
-        self.base_url = f"https://{self.creds['store_url']}/admin/api/{self.creds['api_version']}/orders.json"
-        self.headers = {"X-Shopify-Access-Token": self.creds['access_token']}
+        # Lưu lại toàn bộ danh sách cấu hình các cửa hàng
+        self.stores_config = config.shopify_stores_config
 
     @st.cache_data(ttl=60)
     def fetch_realtime_purchases(_self):
-        try:
-            thirty_minutes_ago = (datetime.now(timezone.utc) - timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%SZ')
-            params = {"created_at_min": thirty_minutes_ago, "status": "any", "fields": "line_items,total_shipping_price_set,subtotal_price,created_at"}
-            response = requests.get(_self.base_url, headers=_self.headers, params=params, timeout=10)
-            response.raise_for_status()
-            orders = response.json().get('orders', [])
-            
-            purchase_data = []
-            for order in orders:
-                subtotal = float(order.get('subtotal_price', 0.0))
-                shipping_fee = float(order.get('total_shipping_price_set', {}).get('shop_money', {}).get('amount', 0.0))
-                order_created_at = order.get('created_at')
-                for item in order.get('line_items', []):
-                    item_price = float(item['price'])
-                    item_quantity = item['quantity']
-                    item_total_value = item_price * item_quantity
-                    shipping_allocation = (shipping_fee * (item_total_value / subtotal)) if subtotal > 0 else 0
-                    purchase_data.append({
-                        'Product Title': item['title'], 
-                        'Purchases': item_quantity, 
-                        'Revenue': item_total_value + shipping_allocation,
-                        'created_at': order_created_at 
-                    })
-            return pd.DataFrame(purchase_data)
-        except Exception as e:
-            print(f"Lỗi khi lấy dữ liệu Realtime từ Shopify: {e}")
-            return pd.DataFrame()
+        # Tạo một danh sách để chứa dữ liệu từ tất cả các cửa hàng
+        all_stores_purchase_data = []
+        
+        # Lặp qua từng cửa hàng trong file cấu hình
+        for store_creds in _self.stores_config:
+            store_id = store_creds.get("store_id", "unknown_store")
+            try:
+                # Tạo URL và Header riêng cho từng cửa hàng
+                base_url = f"https://{store_creds['store_url']}/admin/api/{store_creds['api_version']}/orders.json"
+                headers = {"X-Shopify-Access-Token": store_creds['access_token']}
+                
+                thirty_minutes_ago = (datetime.now(timezone.utc) - timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%SZ')
+                params = {"created_at_min": thirty_minutes_ago, "status": "any", "fields": "line_items,total_shipping_price_set,subtotal_price,created_at"}
+                
+                print(f"Fetching Shopify data for store: {store_id}")
+                response = requests.get(base_url, headers=headers, params=params, timeout=10)
+                response.raise_for_status()
+                orders = response.json().get('orders', [])
+                
+                for order in orders:
+                    subtotal = float(order.get('subtotal_price', 0.0))
+                    shipping_fee = float(order.get('total_shipping_price_set', {}).get('shop_money', {}).get('amount', 0.0))
+                    order_created_at = order.get('created_at')
+                    for item in order.get('line_items', []):
+                        item_price = float(item['price'])
+                        item_quantity = item['quantity']
+                        item_total_value = item_price * item_quantity
+                        shipping_allocation = (shipping_fee * (item_total_value / subtotal)) if subtotal > 0 else 0
+                        # Thêm dữ liệu vào danh sách chung
+                        all_stores_purchase_data.append({
+                            'Product Title': item['title'], 
+                            'Purchases': item_quantity, 
+                            'Revenue': item_total_value + shipping_allocation,
+                            'created_at': order_created_at 
+                        })
+            except Exception as e:
+                print(f"Lỗi khi lấy dữ liệu Realtime từ Shopify store '{store_id}': {e}")
+                # Bỏ qua cửa hàng bị lỗi và tiếp tục với các cửa hàng khác
+                continue
+                
+        # Trả về một DataFrame duy nhất chứa dữ liệu của tất cả các cửa hàng
+        return pd.DataFrame(all_stores_purchase_data)
 
     @st.cache_data
     def fetch_historical_purchases(_self, start_date: str, end_date: str, segment: str):
-        purchase_data = []
+        all_stores_purchase_data = []
         tz = pytz.timezone('Asia/Ho_Chi_Minh')
         start_dt_obj = datetime.strptime(start_date, "%Y-%m-%d")
         end_dt_obj = datetime.strptime(end_date, "%Y-%m-%d")
         start_time_aware = tz.localize(start_dt_obj)
         end_time_aware = tz.localize(end_dt_obj + timedelta(days=1))
         
-        url = _self.base_url
-        params = {
-            "status": "any", 
-            "created_at_min": start_time_aware.isoformat(), 
-            "created_at_max": end_time_aware.isoformat(), 
-            "limit": 250, 
-            "fields": "id,line_items,subtotal_price,total_shipping_price_set,created_at"
-        }
-        try:
-            while url:
-                response = requests.get(url, headers=_self.headers, params=params, timeout=15)
-                response.raise_for_status()
-                data = response.json()
-                orders = data.get('orders', [])
-                for order in orders:
-                    subtotal = float(order.get('subtotal_price', 0.0))
-                    shipping_fee = float(order.get('total_shipping_price_set', {}).get('shop_money', {}).get('amount', 0.0))
-                    created_at_utc = datetime.fromisoformat(order['created_at'].replace('Z', '+00:00'))
-                    created_at_local = created_at_utc.astimezone(tz)
-                    for item in order.get('line_items', []):
-                        item_price = float(item.get('price', 0.0))
-                        item_quantity = int(item.get('quantity', 0))
-                        item_total_value = item_price * item_quantity
-                        shipping_allocation = (shipping_fee * (item_total_value / subtotal)) if subtotal > 0 else 0
-                        item_data = {'Page Title': item['title'], 'Purchases': item_quantity, 'Revenue': item_total_value + shipping_allocation}
-                        if segment == 'By Day':
-                            item_data['Date'] = created_at_local.strftime('%Y-%m-%d')
-                        elif segment == 'By Week':
-                            item_data['Week'] = created_at_local.strftime('%Y-%U')
-                        purchase_data.append(item_data)
+        # Lặp qua từng cửa hàng trong file cấu hình
+        for store_creds in _self.stores_config:
+            store_id = store_creds.get("store_id", "unknown_store")
+            try:
+                base_url = f"https://{store_creds['store_url']}/admin/api/{store_creds['api_version']}/orders.json"
+                headers = {"X-Shopify-Access-Token": store_creds['access_token']}
                 
-                url = None
-                if 'Link' in response.headers:
-                    links = requests.utils.parse_header_links(response.headers['Link'])
-                    for link in links:
-                        if link.get('rel') == 'next':
-                            url = link.get('url')
-                            params = None
-                            break
-            
-            if not purchase_data: return pd.DataFrame()
-            
-            purchases_df = pd.DataFrame(purchase_data)
-            group_by_cols = ['Page Title']
-            if segment == 'By Day': group_by_cols.append('Date')
-            elif segment == 'By Week': group_by_cols.append('Week')
-            return purchases_df.groupby(group_by_cols).agg({'Purchases': 'sum', 'Revenue': 'sum'}).reset_index()
+                url = base_url
+                params = {
+                    "status": "any", 
+                    "created_at_min": start_time_aware.isoformat(), 
+                    "created_at_max": end_time_aware.isoformat(), 
+                    "limit": 250, 
+                    "fields": "id,line_items,subtotal_price,total_shipping_price_set,created_at"
+                }
+                
+                print(f"Fetching historical Shopify data for store: {store_id}")
+                while url:
+                    response = requests.get(url, headers=headers, params=params, timeout=15)
+                    response.raise_for_status()
+                    data = response.json()
+                    orders = data.get('orders', [])
+                    for order in orders:
+                        subtotal = float(order.get('subtotal_price', 0.0))
+                        shipping_fee = float(order.get('total_shipping_price_set', {}).get('shop_money', {}).get('amount', 0.0))
+                        created_at_utc = datetime.fromisoformat(order['created_at'].replace('Z', '+00:00'))
+                        created_at_local = created_at_utc.astimezone(tz)
+                        for item in order.get('line_items', []):
+                            item_price = float(item.get('price', 0.0))
+                            item_quantity = int(item.get('quantity', 0))
+                            item_total_value = item_price * item_quantity
+                            shipping_allocation = (shipping_fee * (item_total_value / subtotal)) if subtotal > 0 else 0
+                            item_data = {'Page Title': item['title'], 'Purchases': item_quantity, 'Revenue': item_total_value + shipping_allocation}
+                            if segment == 'By Day':
+                                item_data['Date'] = created_at_local.strftime('%Y-%m-%d')
+                            elif segment == 'By Week':
+                                item_data['Week'] = created_at_local.strftime('%Y-%U')
+                            all_stores_purchase_data.append(item_data)
+                    
+                    url = None
+                    if 'Link' in response.headers:
+                        links = requests.utils.parse_header_links(response.headers['Link'])
+                        for link in links:
+                            if link.get('rel') == 'next':
+                                url = link.get('url')
+                                params = None
+                                break
+            except Exception as e:
+                st.error(f"Lỗi khi lấy dữ liệu Lịch sử từ Shopify store '{store_id}': {e}")
+                continue
 
-        except Exception as e:
-            st.error(f"Lỗi khi lấy dữ liệu Lịch sử từ Shopify: {e}")
-            return pd.DataFrame()
+        if not all_stores_purchase_data: return pd.DataFrame()
+        
+        purchases_df = pd.DataFrame(all_stores_purchase_data)
+        group_by_cols = ['Page Title']
+        if segment == 'By Day': group_by_cols.append('Date')
+        elif segment == 'By Week': group_by_cols.append('Week')
+        
+        # Tính tổng hợp dữ liệu từ tất cả các cửa hàng
+        return purchases_df.groupby(group_by_cols).agg({'Purchases': 'sum', 'Revenue': 'sum'}).reset_index()
