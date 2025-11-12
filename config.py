@@ -102,7 +102,13 @@ class AppConfig:
         except Exception as e:
             print(f"Error loading Google credentials: {e}")
             self.ga_credentials = None
-        self.shopify_creds = self.secrets.get("shopify_credentials", {})
+            
+        # Bỏ self.shopify_creds cũ
+        # self.shopify_creds = self.secrets.get("shopify_credentials", {})
+        
+        # Đọc danh sách cấu hình các cửa hàng Shopify
+        self.shopify_stores_config = self.secrets.get("shopify_stores", [])
+        
         self.cloudinary_cloud_name = self.secrets.get("cloudinary", {}).get("cloud_name")
         self.cloudinary_upload_preset = self.secrets.get("cloudinary", {}).get("upload_preset")
         self.users_details = self.secrets.get("users", {})
