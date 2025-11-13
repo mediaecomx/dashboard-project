@@ -12,7 +12,7 @@ class DataProcessor:
     def __init__(self, ga_service: GoogleAnalyticsService, shopify_service: ShopifyService, config):
         self.ga_service = ga_service
         self.shopify_service = shopify_service
-        self.config = config # <-- Thêm dòng này để truy cập config
+        self.config = config 
         self.symbols = config.SYMBOLS
         self.page_title_map = config.page_title_map
         self.product_to_symbol_map = config.product_to_symbol_map
@@ -24,7 +24,8 @@ class DataProcessor:
         if 'last_quota_details' not in st.session_state:
             st.session_state.last_quota_details = None
         if 'last_ga_kpis' not in st.session_state:
-            st.session_state.last_ga_kpis = (0, 0)
+            # Thêm metric checkout vào session state: (5min, 30min, checkout30min)
+            st.session_state.last_ga_kpis = (0, 0, 0)
         
     def _extract_core_and_symbol(self, title: str, symbols: list):
         found_symbol = ""
@@ -51,7 +52,6 @@ class DataProcessor:
                 return symbol
         return "🛒"
         
-    # --- BẮT ĐẦU THAY ĐỔI LỚN ---
     def get_processed_realtime_data(self, property_ids: list, selected_tz):
         QUOTA_GUARD_THRESHOLD = 500
         QUOTA_DEGRADED_THRESHOLD = 2000
@@ -74,7 +74,7 @@ class DataProcessor:
         if not property_ids:
              st.warning("Please select at least one Google Analytics Property from the sidebar.")
              return {
-                "active_users_5min": 0, "active_users_30min": 0, "total_views": 0,
+                "active_users_5min": 0, "active_users_30min": 0, "total_views": 0, "total_checkouts": 0,
                 "purchase_count_30min": 0, "final_pages_df": pd.DataFrame(),
                 "per_min_df": pd.DataFrame(), "fetch_time": datetime.now(timezone.utc),
                 "quota_details": {}, "debug_data": {},
@@ -85,29 +85,25 @@ class DataProcessor:
             all_ga_dfs = []
             total_active_5min = 0
             total_active_30min = 0
-            # Giữ lại thông tin quota của tài khoản bị giới hạn nhất
+            total_checkouts_30min = 0
             final_quota_details = {"tokens_per_hour": {"consumed": 0, "remaining": float('inf')}, "tokens_per_day": {"consumed": 0, "remaining": float('inf')}}
             
-            # Vòng lặp để lấy dữ liệu từ từng property
             for prop_id in property_ids:
-                ga_raw_df, quota_details, fetch_time, active_users_5min, active_users_30min = self.ga_service.fetch_realtime_report(prop_id)
+                # Lấy thêm metric checkouts_30min từ service
+                ga_raw_df, quota_details, fetch_time, active_users_5min, active_users_30min, checkouts_30min = self.ga_service.fetch_realtime_report(prop_id)
                 
-                # Cộng dồn các chỉ số chính
                 total_active_5min += active_users_5min
                 total_active_30min += active_users_30min
+                total_checkouts_30min += checkouts_30min
                 
-                # Thêm dữ liệu vào danh sách
                 if not ga_raw_df.empty:
-                    # Lấy tên của property để thêm vào dataframe cho dễ phân biệt
                     prop_name = next((name for name, pid in self.config.AVAILABLE_PROPERTIES.items() if pid == prop_id), prop_id)
                     ga_raw_df['Property'] = prop_name
                     all_ga_dfs.append(ga_raw_df)
 
-                # Cập nhật thông tin quota
                 if quota_details:
                     final_quota_details["tokens_per_hour"]["consumed"] += quota_details.get("tokens_per_hour", {}).get("consumed", 0)
                     final_quota_details["tokens_per_day"]["consumed"] += quota_details.get("tokens_per_day", {}).get("consumed", 0)
-                    # Lấy giá trị remaining thấp nhất
                     rem_hr = quota_details.get("tokens_per_hour", {}).get("remaining")
                     if isinstance(rem_hr, int):
                          final_quota_details["tokens_per_hour"]["remaining"] = min(final_quota_details["tokens_per_hour"]["remaining"], rem_hr)
@@ -115,29 +111,29 @@ class DataProcessor:
                     if isinstance(rem_day, int):
                         final_quota_details["tokens_per_day"]["remaining"] = min(final_quota_details["tokens_per_day"]["remaining"], rem_day)
 
-            # Gộp tất cả các dataframe lại thành một
             ga_combined_df = pd.concat(all_ga_dfs, ignore_index=True) if all_ga_dfs else pd.DataFrame()
             
-            # Lưu dữ liệu đã gộp vào session
             st.session_state.last_ga_data = ga_combined_df
             st.session_state.last_quota_details = final_quota_details
             st.session_state.last_ga_fetch_time = fetch_time
-            st.session_state.last_ga_kpis = (total_active_5min, total_active_30min)
+            # Lưu thêm checkout vào session
+            st.session_state.last_ga_kpis = (total_active_5min, total_active_30min, total_checkouts_30min)
             if final_quota_details.get("tokens_per_hour", {}).get("remaining", 0) < QUOTA_DEGRADED_THRESHOLD:
                  st.sidebar.warning(f"Quota is low! Refresh rate reduced to 5 minutes.")
         else:
             ga_combined_df = st.session_state.last_ga_data
             final_quota_details = st.session_state.last_quota_details
             fetch_time = st.session_state.last_ga_fetch_time
-            total_active_5min, total_active_30min = st.session_state.last_ga_kpis
+            # Lấy 3 giá trị từ session
+            total_active_5min, total_active_30min, total_checkouts_30min = st.session_state.last_ga_kpis
             st.sidebar.info(reason)
 
         shopify_raw_df = self.shopify_service.fetch_realtime_purchases()
 
         if ga_combined_df is None or ga_combined_df.empty:
-            saved_5min, saved_30min = st.session_state.last_ga_kpis
+            saved_5min, saved_30min, saved_checkouts = st.session_state.last_ga_kpis
             return {
-                "active_users_5min": saved_5min, "active_users_30min": saved_30min, "total_views": 0,
+                "active_users_5min": saved_5min, "active_users_30min": saved_30min, "total_views": 0, "total_checkouts": saved_checkouts,
                 "purchase_count_30min": 0, "final_pages_df": pd.DataFrame(),
                 "per_min_df": pd.DataFrame(), "fetch_time": fetch_time or datetime.now(timezone.utc),
                 "quota_details": final_quota_details or {}, "debug_data": {},
@@ -150,7 +146,6 @@ class DataProcessor:
         per_min_data = {str(i): per_min_summary.get(i, 0) for i in range(30)}
         per_min_df = pd.DataFrame([{"Time": f"-{int(k)} min", "Active Users": v} for k, v in sorted(per_min_data.items(), key=lambda item: int(item[0]))])
         
-        # Nhóm dữ liệu từ GA, bao gồm cả cột Property mới
         ga_pages_df = ga_combined_df.groupby(["Page Title and Screen Class", "Property"]).agg(
             ActiveUsers=('Active Users', 'sum'),
             Views=('Views', 'sum')
@@ -169,13 +164,11 @@ class DataProcessor:
             events_data = events_data[events_data['Marketer'] != ""]
             purchase_events_df = events_data[['created_at', 'Marketer', 'ProductSymbol']].copy()
             shopify_processed_df[['core_title', 'symbol']] = shopify_processed_df['Product Title'].apply(lambda x: pd.Series(self._extract_core_and_symbol(x, self.symbols)))
-            # Chỉ nhóm theo core_title và symbol, không cần Property ở đây
             shopify_grouped = shopify_processed_df.groupby(['core_title', 'symbol']).agg(
                 Purchases=('Purchases', 'sum'),
                 Revenue=('Revenue', 'sum'),
                 LastPurchaseTime=('created_at', 'max')
             ).reset_index()
-            # Nối dữ liệu Shopify vào bảng GA đã xử lý
             merged_df = pd.merge(ga_processed_df, shopify_grouped, on=['core_title', 'symbol'], how='left')
         else:
             merged_df = ga_processed_df.copy()
@@ -198,7 +191,6 @@ class DataProcessor:
         
         merged_df['Last Purchase'] = merged_df['LastPurchaseTime'].apply(format_timestamp_to_hms)
         
-        # Thêm cột Property vào danh sách hiển thị
         final_pages_df = merged_df.sort_values(by="ActiveUsers", ascending=False).rename(
             columns={"ActiveUsers": "Active Users"}
         )[
@@ -214,15 +206,15 @@ class DataProcessor:
         
         return {
             "active_users_5min": total_active_5min, "active_users_30min": total_active_30min,
-            "total_views": total_views, "purchase_count_30min": purchase_count_30min,
+            "total_views": total_views, 
+            "total_checkouts": total_checkouts_30min, # Trả về metric mới
+            "purchase_count_30min": purchase_count_30min,
             "final_pages_df": final_pages_df, "per_min_df": per_min_df,
             "fetch_time": fetch_time, "quota_details": final_quota_details, "debug_data": debug_data,
             "purchase_events": purchase_events_df
         }
-    # --- KẾT THÚC THAY ĐỔI LỚN ---
 
     def get_processed_historical_data(self, property_id: str, start_date_str, end_date_str, segment):
-        # Hàm này vẫn giữ nguyên vì báo cáo lịch sử thường xem theo từng property
         ga_raw_df = self.ga_service.fetch_historical_report(property_id, start_date_str, end_date_str, segment)
         shopify_raw_df = self.shopify_service.fetch_historical_purchases(start_date_str, end_date_str, segment)
 
