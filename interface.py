@@ -15,9 +15,6 @@ import random
 
 @st.cache_data(ttl=60)
 def load_history_from_supabase(time_window_hours):
-    """
-    Tải dữ liệu lịch sử từ Supabase trong khoảng thời gian quy định (tính bằng giờ).
-    """
     try:
         config = get_config()
         start_time = datetime.now(timezone.utc) - timedelta(hours=time_window_hours)
@@ -50,9 +47,6 @@ def load_history_from_supabase(time_window_hours):
         return pd.DataFrame()
 
 def save_snapshot_to_supabase(snapshot_data, timestamp):
-    """
-    Lưu một bản ghi dữ liệu mới vào Supabase.
-    """
     try:
         config = get_config()
         config.supabase.table("realtime_history").insert({
@@ -63,9 +57,6 @@ def save_snapshot_to_supabase(snapshot_data, timestamp):
         print(f"Error saving snapshot to Supabase: {e}")
 
 def cleanup_old_history_supabase():
-    """
-    Xóa các bản ghi cũ hơn 25 giờ để giữ cho database gọn nhẹ.
-    """
     try:
         config = get_config()
         cutoff_time = datetime.now(timezone.utc) - timedelta(hours=25)
@@ -117,7 +108,6 @@ def render_progress_bar(value, total):
     
 @st.cache_data(ttl=60)
 def get_app_settings():
-    """Đọc cài đặt toàn cục của ứng dụng từ Supabase."""
     try:
         config = get_config()
         response = config.supabase.table("app_settings").select("*").eq("id", 1).single().execute()
@@ -139,7 +129,6 @@ def get_app_settings():
     }
 
 def admin_settings_ui(current_settings):
-    """Hiển thị giao diện tùy chỉnh cho Admin trên sidebar."""
     st.divider()
     st.subheader("⚙️ App Settings")
     
@@ -412,11 +401,8 @@ class DashboardUI:
             if not globally_selected_properties:
                  globally_selected_properties = [self.config.DEFAULT_PROPERTY_NAME]
 
-            # --- BẮT ĐẦU THAY ĐỔI 1: HIỂN THỊ LẠI BÁO CÁO ---
-            # Luôn hiển thị Landing Page Report trong menu
             report_options = ("Realtime Dashboard", "Landing Page Report", "Profile")
             page = st.radio("Choose a report:", report_options)
-            # --- KẾT THÚC THAY ĐỔI 1 ---
             
             self.auth.logout("Log Out", "sidebar") 
 
@@ -490,19 +476,33 @@ class DashboardUI:
             data = self.processor.get_processed_realtime_data(current_property_ids, selected_tz)
             localized_fetch_time = data['fetch_time'].astimezone(selected_tz)
             st.markdown(f"*Last update: {localized_fetch_time.strftime('%Y-%m-%d %H:%M:%S')}*")
-            top_col1, top_col2, top_col3 = st.columns(3)
+            
+            # --- BẮT ĐẦU THAY ĐỔI: 4 CỘT THAY VÌ 3 ---
+            top_col1, top_col2, top_col3, top_col4 = st.columns(4)
+            
             with top_col1:
                 target_5min = self.config.TARGET_USERS_5MIN * len(current_property_ids) if current_property_ids else self.config.TARGET_USERS_5MIN
                 bg_color, text_color = get_heatmap_color_and_text(data['active_users_5min'], target_5min, self.config.COLOR_COLD, self.config.COLOR_HOT)
                 st.markdown(f"""<div style="background-color: {bg_color}; border-radius: 7px; padding: 20px; text-align: center; height: 100%;"><p style="font-size: 16px; color: {text_color}; margin-bottom: 5px;">ACTIVE USERS (5 MIN)</p><p style="font-size: 32px; font-weight: bold; color: {text_color}; margin: 0;">{data['active_users_5min']}</p></div>""", unsafe_allow_html=True)
+            
             with top_col2:
                 target_30min = self.config.TARGET_USERS_30MIN * len(current_property_ids) if current_property_ids else self.config.TARGET_USERS_30MIN
                 bg_color, text_color = get_heatmap_color_and_text(data['active_users_30min'], target_30min, self.config.COLOR_COLD, self.config.COLOR_HOT)
                 st.markdown(f"""<div style="background-color: {bg_color}; border-radius: 7px; padding: 20px; text-align: center; height: 100%;"><p style="font-size: 16px; color: {text_color}; margin-bottom: 5px;">ACTIVE USERS (30 MIN)</p><p style="font-size: 32px; font-weight: bold; color: {text_color}; margin: 0;">{data['active_users_30min']}</p></div>""", unsafe_allow_html=True)
+            
             with top_col3:
                 target_views = self.config.TARGET_VIEWS_30MIN * len(current_property_ids) if current_property_ids else self.config.TARGET_VIEWS_30MIN
                 bg_color, text_color = get_heatmap_color_and_text(data['total_views'], target_views, self.config.COLOR_COLD, self.config.COLOR_HOT)
                 st.markdown(f"""<div style="background-color: {bg_color}; border-radius: 7px; padding: 20px; text-align: center; height: 100%;"><p style="font-size: 16px; color: {text_color}; margin-bottom: 5px;">VIEWS (30 MIN)</p><p style="font-size: 32px; font-weight: bold; color: {text_color}; margin: 0;">{data['total_views']}</p></div>""", unsafe_allow_html=True)
+            
+            with top_col4:
+                # Thẻ mới: CHECKOUTS
+                target_checkouts = self.config.TARGET_CHECKOUTS_30MIN * len(current_property_ids) if current_property_ids else self.config.TARGET_CHECKOUTS_30MIN
+                bg_color, text_color = get_heatmap_color_and_text(data['total_checkouts'], target_checkouts, self.config.COLOR_COLD, self.config.COLOR_HOT)
+                st.markdown(f"""<div style="background-color: {bg_color}; border-radius: 7px; padding: 20px; text-align: center; height: 100%;"><p style="font-size: 16px; color: {text_color}; margin-bottom: 5px;">CHECKOUT (30 MIN)</p><p style="font-size: 32px; font-weight: bold; color: {text_color}; margin: 0;">{data['total_checkouts']}</p></div>""", unsafe_allow_html=True)
+            
+            # --- KẾT THÚC THAY ĐỔI ---
+
             st.divider()
             bottom_col1, bottom_col2 = st.columns(2)
             with bottom_col1:
@@ -652,8 +652,6 @@ class DashboardUI:
     def render_historical_report(self, effective_user_info, debug_mode, selected_property_names):
         st.title("📊 Page Performance Report")
         
-        # --- BẮT ĐẦU THAY ĐỔI 2: THÊM MENU CHỌN LỰA ---
-        # Cho phép người dùng chọn một property từ danh sách toàn cục để xem báo cáo
         selected_property_for_report = st.selectbox(
             "Select a Property to analyze historically:",
             options=selected_property_names
@@ -664,7 +662,6 @@ class DashboardUI:
             st.stop()
             
         current_property_id = self.config.AVAILABLE_PROPERTIES[selected_property_for_report]
-        # --- KẾT THÚC THAY ĐỔI 2 ---
 
         col1, col2 = st.columns(2)
         with col1:
