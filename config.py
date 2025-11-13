@@ -5,8 +5,6 @@ import os
 import streamlit as st
 from google.oauth2 import service_account
 from supabase import create_client, Client
-import yaml
-from yaml.loader import SafeLoader
 import toml
 import copy
 
@@ -71,9 +69,14 @@ class AppConfig:
         self.DEFAULT_PROPERTY_NAME = "PropeLify"
         self.HOURLY_TOKEN_QUOTA = 5000
         self.DAILY_TOKEN_QUOTA = 25000
+        
+        # --- CẤU HÌNH MỤC TIÊU (TARGETS) ---
         self.TARGET_USERS_5MIN = 50
         self.TARGET_USERS_30MIN = 200
         self.TARGET_VIEWS_30MIN = 1000
+        # Thêm mục tiêu cho Checkout
+        self.TARGET_CHECKOUTS_30MIN = 15
+        
         self.COLOR_COLD = (40, 40, 60)
         self.COLOR_HOT = (255, 190, 0)
         self.TIMEZONE_MAPPINGS = { "Viet Nam (UTC+7)": "Asia/Ho_Chi_Minh", "New York (UTC-4)": "America/New_York", "Chicago (UTC-5)": "America/Chicago", "Denver (UTC-6)": "America/Denver", "Los Angeles (UTC-7)": "America/Los_Angeles", "Anchorage (UTC-8)": "America/Anchorage", "Honolulu (UTC-10)": "Pacific/Honolulu" }
@@ -91,24 +94,20 @@ class AppConfig:
         except Exception:
             pass
         self.default_avatar_url = "https://raw.githubusercontent.com/mediaecomx/dashboard-project/refs/heads/main/profile.jpg"
+        
         self.ga_credentials = None
         try:
             if "google_credentials" in self.secrets:
                 google_creds_dict = dict(self.secrets["google_credentials"])
-                google_creds_dict["private_key"] = google_creds_dict["private_key"].replace("\\n", "\n")
                 self.ga_credentials = service_account.Credentials.from_service_account_info(
-                    google_creds_dict, scopes=["https://www.googleapis.com/auth/analytics.readonly"]
+                    google_creds_dict, 
+                    scopes=["https://www.googleapis.com/auth/analytics.readonly"]
                 )
         except Exception as e:
             print(f"Error loading Google credentials: {e}")
             self.ga_credentials = None
-            
-        # Bỏ self.shopify_creds cũ
-        # self.shopify_creds = self.secrets.get("shopify_credentials", {})
         
-        # Đọc danh sách cấu hình các cửa hàng Shopify
         self.shopify_stores_config = self.secrets.get("shopify_stores", [])
-        
         self.cloudinary_cloud_name = self.secrets.get("cloudinary", {}).get("cloud_name")
         self.cloudinary_upload_preset = self.secrets.get("cloudinary", {}).get("upload_preset")
         self.users_details = self.secrets.get("users", {})
