@@ -18,6 +18,7 @@ class GoogleAnalyticsService:
     @st.cache_data(ttl=60)
     def fetch_realtime_report(_self, property_id: str):
         try:
+            # 1. KPI Request: Active Users
             kpi_request = RunRealtimeReportRequest(
                 property=f"properties/{property_id}",
                 metrics=[Metric(name="activeUsers")],
@@ -26,6 +27,8 @@ class GoogleAnalyticsService:
                     MinuteRange(start_minutes_ago=4, end_minutes_ago=0)
                 ]
             )
+            
+            # 2. Pages Request: Active Users & Views by Page
             pages_request = RunRealtimeReportRequest(
                 property=f"properties/{property_id}",
                 dimensions=[Dimension(name="unifiedScreenName"), Dimension(name="minutesAgo")],
@@ -33,21 +36,48 @@ class GoogleAnalyticsService:
                 minute_ranges=[MinuteRange(start_minutes_ago=29, end_minutes_ago=0)],
                 return_property_quota=True
             )
+
+            # 3. Events Request: Lấy dữ liệu Checkout (begin_checkout)
+            events_request = RunRealtimeReportRequest(
+                property=f"properties/{property_id}",
+                dimensions=[Dimension(name="eventName")],
+                metrics=[Metric(name="eventCount")],
+                minute_ranges=[MinuteRange(start_minutes_ago=29, end_minutes_ago=0)]
+            )
+
+            # Execute requests
             kpi_response = _self.client.run_realtime_report(kpi_request)
             pages_response = _self.client.run_realtime_report(pages_request)
+            events_response = _self.client.run_realtime_report(events_request)
             
+            # Process KPI
             active_users_30min = (int(kpi_response.rows[0].metric_values[0].value) if kpi_response.rows else 0)
             active_users_5min = (int(kpi_response.rows[1].metric_values[0].value) if len(kpi_response.rows) > 1 else 0)
+            
+            # Process Checkouts
+            checkouts_30min = 0
+            if events_response.rows:
+                for row in events_response.rows:
+                    event_name = row.dimension_values[0].value
+                    if event_name == "begin_checkout":
+                        checkouts_30min = int(row.metric_values[0].value)
+                        break
+
+            # Process Quota
             pq = getattr(pages_response, "property_quota", None)
             quota_details = {
                 "tokens_per_hour": {"consumed": pq.tokens_per_hour.consumed if pq and pq.tokens_per_hour else 0, "remaining": pq.tokens_per_hour.remaining if pq and pq.tokens_per_hour else "N/A"},
                 "tokens_per_day": {"consumed": pq.tokens_per_day.consumed if pq and pq.tokens_per_day else 0, "remaining": pq.tokens_per_day.remaining if pq and pq.tokens_per_day else "N/A"}
             }
+            
+            # Process Pages Rows
             rows = [{"Page Title and Screen Class": row.dimension_values[0].value, "minutesAgo": int(row.dimension_values[1].value), "Active Users": int(row.metric_values[0].value), "Views": int(row.metric_values[1].value)} for row in pages_response.rows]
-            return pd.DataFrame(rows), quota_details, datetime.now(pytz.utc), active_users_5min, active_users_30min
+            
+            return pd.DataFrame(rows), quota_details, datetime.now(pytz.utc), active_users_5min, active_users_30min, checkouts_30min
         except Exception as e:
             st.error(f"Lỗi khi lấy dữ liệu Realtime từ Google Analytics: {e}")
-            return pd.DataFrame(), {}, datetime.now(pytz.utc), 0, 0
+            # Trả về thêm 0 cho checkouts_30min khi lỗi
+            return pd.DataFrame(), {}, datetime.now(pytz.utc), 0, 0, 0
 
     @st.cache_data
     def fetch_historical_report(_self, property_id: str, start_date: str, end_date: str, segment: str):
@@ -78,19 +108,15 @@ class GoogleAnalyticsService:
 
 class ShopifyService:
     def __init__(self, config):
-        # Lưu lại toàn bộ danh sách cấu hình các cửa hàng
         self.stores_config = config.shopify_stores_config
 
     @st.cache_data(ttl=60)
     def fetch_realtime_purchases(_self):
-        # Tạo một danh sách để chứa dữ liệu từ tất cả các cửa hàng
         all_stores_purchase_data = []
         
-        # Lặp qua từng cửa hàng trong file cấu hình
         for store_creds in _self.stores_config:
             store_id = store_creds.get("store_id", "unknown_store")
             try:
-                # Tạo URL và Header riêng cho từng cửa hàng
                 base_url = f"https://{store_creds['store_url']}/admin/api/{store_creds['api_version']}/orders.json"
                 headers = {"X-Shopify-Access-Token": store_creds['access_token']}
                 
@@ -111,7 +137,6 @@ class ShopifyService:
                         item_quantity = item['quantity']
                         item_total_value = item_price * item_quantity
                         shipping_allocation = (shipping_fee * (item_total_value / subtotal)) if subtotal > 0 else 0
-                        # Thêm dữ liệu vào danh sách chung
                         all_stores_purchase_data.append({
                             'Product Title': item['title'], 
                             'Purchases': item_quantity, 
@@ -120,10 +145,8 @@ class ShopifyService:
                         })
             except Exception as e:
                 print(f"Lỗi khi lấy dữ liệu Realtime từ Shopify store '{store_id}': {e}")
-                # Bỏ qua cửa hàng bị lỗi và tiếp tục với các cửa hàng khác
                 continue
                 
-        # Trả về một DataFrame duy nhất chứa dữ liệu của tất cả các cửa hàng
         return pd.DataFrame(all_stores_purchase_data)
 
     @st.cache_data
@@ -135,7 +158,6 @@ class ShopifyService:
         start_time_aware = tz.localize(start_dt_obj)
         end_time_aware = tz.localize(end_dt_obj + timedelta(days=1))
         
-        # Lặp qua từng cửa hàng trong file cấu hình
         for store_creds in _self.stores_config:
             store_id = store_creds.get("store_id", "unknown_store")
             try:
@@ -193,5 +215,4 @@ class ShopifyService:
         if segment == 'By Day': group_by_cols.append('Date')
         elif segment == 'By Week': group_by_cols.append('Week')
         
-        # Tính tổng hợp dữ liệu từ tất cả các cửa hàng
         return purchases_df.groupby(group_by_cols).agg({'Purchases': 'sum', 'Revenue': 'sum'}).reset_index()
