@@ -128,6 +128,38 @@ def get_app_settings():
         "selected_ga_properties": ["PropeLify"]
     }
 
+
+@st.cache_data(ttl=300) # Cache trong 5 phút
+def load_purchase_events_from_supabase(time_window_hours):
+    """
+    Truy vấn bảng sales_events từ Supabase để lấy lịch sử các đơn hàng
+    trong một khoảng thời gian nhất định.
+    """
+    try:
+        config = get_config()
+        if not config.supabase:
+            return pd.DataFrame()
+
+        start_time = datetime.now(timezone.utc) - timedelta(hours=time_window_hours)
+        
+        # Lấy các cột cần thiết để vẽ biểu tượng
+        response = config.supabase.table("sales_events") \
+            .select("created_at, product_title, product_symbol") \
+            .gte("created_at", start_time.isoformat()) \
+            .order("created_at", desc=False) \
+            .execute()
+
+        if not response.data:
+            return pd.DataFrame()
+
+        return pd.DataFrame(response.data)
+
+    except Exception as e:
+        print(f"Error loading purchase event history from Supabase: {e}")
+        return pd.DataFrame()
+
+
+
 def admin_settings_ui(current_settings):
     st.divider()
     st.subheader("⚙️ App Settings")
@@ -549,6 +581,9 @@ class DashboardUI:
         time_window_hours = app_settings.get('time_window_hours', 3)
         history_df_melted = load_history_from_supabase(time_window_hours)
         
+        # Gọi hàm mới để lấy lịch sử đơn hàng bền vững từ Supabase
+        historical_purchases_df = load_purchase_events_from_supabase(time_window_hours)
+
         st.divider()
         st.subheader(f"Active Users Trend by Marketer (Last {time_window_hours} hours)")
 
@@ -559,16 +594,25 @@ class DashboardUI:
             fig_trend.update_traces(line=dict(width=3))
             fig_trend.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', yaxis=dict(gridcolor='rgba(255,255,255,0.1)'), legend_title_text='', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), hovermode="x unified")
             
-            if not purchase_events.empty:
-                purchase_events['created_at_local'] = purchase_events['created_at'].dt.tz_convert(localized_fetch_time.tzinfo)
+            # --- BẮT ĐẦU THAY ĐỔI ---
+            # Sử dụng historical_purchases_df thay vì purchase_events
+            if not historical_purchases_df.empty:
+                # Chuyển đổi múi giờ cho created_at để khớp với biểu đồ
+                historical_purchases_df['created_at_local'] = pd.to_datetime(historical_purchases_df['created_at']).dt.tz_convert(localized_fetch_time.tzinfo)
+                
+                # Lấy tên Marketer từ Product Title, giống như logic trong processor.py
+                historical_purchases_df['Marketer'] = historical_purchases_df['product_title'].apply(self.processor.get_marketer_from_page_title)
+
+                # Hợp nhất với dữ liệu trend để tìm vị trí Y (Active Users) tại thời điểm mua hàng
                 merged_events = pd.merge_asof(
-                    purchase_events.sort_values('created_at_local'),
+                    historical_purchases_df.sort_values('created_at_local'),
                     history_df_melted.sort_values('timestamp'),
                     left_on='created_at_local',
                     right_on='timestamp',
                     by='Marketer',
                     direction='nearest'
                 )
+                
                 for _, event in merged_events.iterrows():
                     try:
                         marker_color = fig_trend.data[[trace.name for trace in fig_trend.data].index(event['Marketer'])].line.color
@@ -576,7 +620,8 @@ class DashboardUI:
                             x=[event['created_at_local']],
                             y=[event['Active Users']],
                             mode='text',
-                            text=[f"<b>{event['ProductSymbol']}{event['Marketer']}</b>"],
+                            # Sử dụng product_symbol từ dữ liệu Supabase
+                            text=[f"<b>{event['product_symbol']}{event['Marketer']}</b>"],
                             textposition='top center',
                             textfont=dict(size=12, color=marker_color),
                             hoverinfo='none',
